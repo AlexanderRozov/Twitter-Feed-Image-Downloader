@@ -1,22 +1,22 @@
 {
   "manifest_version": 3,
-  "name": "X Feed Image Downloader",
-  "version": "1.1.0",
-  "description": "Downloads images found in X/Twitter feed posts from a specified profile.",
-  "permissions": [
-    "activeTab",
-    "downloads",
-    "storage",
-    "scripting"
-  ],
+  "name": "Image Feed Downloader",
+  "version": "1.2.0",
+  "description": "Download original images from X/Twitter feeds and tag-based Booru galleries.",
+  "minimum_chrome_version": "120",
+  "permissions": ["activeTab", "downloads", "storage", "scripting", "tabs", "alarms"],
   "host_permissions": [
     "https://x.com/*",
     "https://twitter.com/*",
-    "https://pbs.twimg.com/*"
+    "https://pbs.twimg.com/*",
+    "https://danbooru.donmai.us/*",
+    "https://gelbooru.com/*",
+    "https://rule34.xxx/*",
+    "https://api.rule34.xxx/*"
   ],
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "X Feed Image Downloader"
+    "default_title": "Image Feed Downloader"
   },
   "background": {
     "service_worker": "background/service-worker.js"
