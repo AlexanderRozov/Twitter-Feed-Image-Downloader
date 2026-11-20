@@ -1,34 +1,44 @@
 # Image Feed Downloader
 
-Chrome / Chromium Manifest V3 extension for collecting original-size images from X/Twitter feeds and tag-based Booru galleries.
+Manifest V3 Chromium extension for downloading original-size media from X/Twitter and tag-based Booru galleries.
 
 ## Sources
-- X / Twitter profile feed (DOM-based scan; source tab must remain open while collecting new posts).
+- X / Twitter profile feed. The source tab must remain open while discovering new posts.
 - Danbooru
 - Gelbooru
 - Rule34
 
-Booru searches use the gallery JSON/DAPI endpoints and enqueue the post's `file_url` (original file), not preview/sample/thumbnail URLs. Availability and file access depend on each site's API, rate limits, permissions, and content rules.
+Booru searches request the post's original `file_url`; the extension does not intentionally fall back to thumbnail/sample fields.
 
 ## Install
-1. Download or clone this repository.
+1. Clone or download this repository.
 2. Open `chrome://extensions` (or the equivalent Chromium extensions page).
-3. Enable Developer mode.
-4. Choose **Load unpacked** and select the repository folder.
+3. Enable Developer mode and choose **Load unpacked**.
+4. Select the repository folder.
 5. Open the extension popup and choose a source.
 
-## Tag search
-Choose **Booru gallery**, select Danbooru, Gelbooru, or Rule34, enter space-separated tags and start. Most Booru engines support negative tags with a leading minus, e.g. `1girl blue_hair -comic`. The extension requests up to the configured maximum number of posts.
+## Tag search and blacklist
+Choose **Booru gallery**, select a site, enter space-separated search tags, then optionally add blacklist tags separated by spaces or commas. A post is excluded when its returned tag set contains any blacklist entry. The blacklist is also sent to the gallery API as negative tags where supported, then checked locally as a second filter.
 
-## Background downloads
-The download queue and job metadata are stored in `chrome.storage.local`. Download tasks use the browser Downloads API, so closing the popup or source page does not cancel already queued downloads. Interrupted downloads are retried a limited number of times. Chrome may suspend the Manifest V3 worker; alarms and download events wake it to resume queue processing.
+## Download folders
+The **Organize downloads into folders** checkbox controls the download path:
+- Enabled: files are grouped by source and, for Booru, up to three tags.
+- Disabled: files are saved directly in the browser's default download directory.
 
-**X limitation:** discovering additional feed posts requires the X page's DOM and scrolling. Keep the X tab open until scanning finishes. Images already enqueued continue downloading if that tab or popup is closed.
+## Queue manager
+Choose **QUEUE** in the popup or open the extension's Options page. The manager displays pending, downloading, completed, and failed items. It supports pause/resume, retrying failed items, removing individual queued/failed entries, and clearing completed history.
 
-## Known limitations / next steps
-- Site APIs can change, impose rate limits, require authentication, or return XML instead of JSON on some deployments.
-- Some galleries expose a post but withhold its original file URL; those posts are skipped rather than downloading a thumbnail.
-- The queue currently keeps completed URL records for deduplication. A future settings page should add queue history cleanup and export.
-- Add integration tests with recorded API fixtures and a browser-based test suite before publishing broadly.
+The queue and duplicate index are stored in `chrome.storage.local`. A URL is indexed when first queued, so the same original URL is not added again even after completed queue rows are cleared. Retry actions reuse the existing queue item.
 
-The extension only accesses public or otherwise browser-accessible content and does not bypass private-account controls, authentication barriers, or site restrictions.
+## Background behavior
+Already queued downloads continue after closing the popup or the source tab. The browser Downloads API performs the transfers; the Manifest V3 service worker wakes on download events and alarms to update state and retry interrupted transfers.
+
+**X limitation:** discovering further posts still requires the X page DOM and scrolling. Keep the X tab open until scanning finishes. Images already added to the download queue are independent of that tab.
+
+## Limitations and validation
+- Gallery APIs, CDN hosts, access requirements, and rate limits can change.
+- Some posts do not expose an original file URL and are skipped.
+- The blacklist depends on tags returned by the gallery API; it cannot infer visual content from an image.
+- This branch has not yet been integration-tested against current live APIs or in Chrome/Opera. Verify each gallery, long-running queue recovery, and X lazy loading before publishing.
+
+The extension does not bypass private-account controls, authentication barriers, or site restrictions.
