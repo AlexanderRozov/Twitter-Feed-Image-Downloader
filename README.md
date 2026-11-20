@@ -1,34 +1,44 @@
-# X Feed Image Downloader
+# Image Feed Downloader
 
-Chrome/Opera Manifest V3 extension for downloading images from X/Twitter profile feeds.
+Manifest V3 Chromium extension for downloading original-size media from X/Twitter and tag-based Booru galleries.
 
-## Version 1.1.0\n\nFixes X media URLs that require the original `format` query parameter.\n\n## What it does
+## Sources
+- X / Twitter profile feed. The source tab must remain open while discovering new posts.
+- Danbooru
+- Gelbooru
+- Rule34
 
-- Accepts an X/Twitter profile URL.
-- Opens the profile if it is not already active.
-- Scans `article` elements representing posts.
-- Finds media hosted at `pbs.twimg.com/media/...`.
-- Ignores profile pictures and most UI images.
-- Can exclude quoted tweets.
-- Automatically scrolls the feed.
-- Removes duplicate image URLs.
-- Downloads original-size media.
-- Stores files under the browser Downloads directory in `X_Feed/`.
+Booru searches request the post's original `file_url`; the extension does not intentionally fall back to thumbnail/sample fields.
 
 ## Install
+1. Clone or download this repository.
+2. Open `chrome://extensions` (or the equivalent Chromium extensions page).
+3. Enable Developer mode and choose **Load unpacked**.
+4. Select the repository folder.
+5. Open the extension popup and choose a source.
 
-1. Extract this directory.
-2. Open Chrome or Opera extensions.
-3. Enable Developer mode.
-4. Select `Load unpacked`.
-5. Select the `twitter_feed_image_downloader` directory.
-6. Open an X/Twitter profile.
-7. Click the extension icon.
-8. Enter the profile URL.
-9. Press `START`.
+## Tag search and blacklist
+Choose **Booru gallery**, select a site, enter space-separated search tags, then optionally add blacklist tags separated by spaces or commas. A post is excluded when its returned tag set contains any blacklist entry. The blacklist is also sent to the gallery API as negative tags where supported, then checked locally as a second filter.
 
-## Important
+## Download folders
+The **Organize downloads into folders** checkbox controls the download path:
+- Enabled: files are grouped by source and, for Booru, up to three tags.
+- Disabled: files are saved directly in the browser's default download directory.
 
-X changes its DOM frequently. This implementation intentionally avoids depending on CSS class names. It uses semantic `article` elements and `pbs.twimg.com/media/` URLs, but X can change its frontend and require scanner updates.
+## Queue manager
+Choose **QUEUE** in the popup or open the extension's Options page. The manager displays pending, downloading, completed, and failed items. It supports pause/resume, retrying failed items, removing individual queued/failed entries, and clearing completed history.
 
-The extension only downloads media that is already exposed to the browser on the profile feed. It does not bypass private accounts, authentication barriers, rate limits, or access controls.
+The queue and duplicate index are stored in `chrome.storage.local`. A URL is indexed when first queued, so the same original URL is not added again even after completed queue rows are cleared. Retry actions reuse the existing queue item.
+
+## Background behavior
+Already queued downloads continue after closing the popup or the source tab. The browser Downloads API performs the transfers; the Manifest V3 service worker wakes on download events and alarms to update state and retry interrupted transfers.
+
+**X limitation:** discovering further posts still requires the X page DOM and scrolling. Keep the X tab open until scanning finishes. Images already added to the download queue are independent of that tab.
+
+## Limitations and validation
+- Gallery APIs, CDN hosts, access requirements, and rate limits can change.
+- Some posts do not expose an original file URL and are skipped.
+- The blacklist depends on tags returned by the gallery API; it cannot infer visual content from an image.
+- This branch has not yet been integration-tested against current live APIs or in Chrome/Opera. Verify each gallery, long-running queue recovery, and X lazy loading before publishing.
+
+The extension does not bypass private-account controls, authentication barriers, or site restrictions.

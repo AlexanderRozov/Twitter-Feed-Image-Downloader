@@ -3,54 +3,68 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>X Feed Image Downloader</title>
+  <title>Image Feed Downloader</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <main class="container">
-    <h1>X Feed Image Downloader</h1>
+    <h1>Image Feed Downloader</h1>
 
-    <label for="profileUrl">Profile URL</label>
-    <input id="profileUrl" type="url"
-           placeholder="https://x.com/username">
+    <label for="sourceMode">Source</label>
+    <select id="sourceMode">
+      <option value="x">X / Twitter profile</option>
+      <option value="booru">Booru gallery (tag search)</option>
+    </select>
 
-    <div class="row">
-      <label class="check">
-        <input id="includeQuoted" type="checkbox">
-        Include quoted tweets
-      </label>
-    </div>
+    <section id="xOptions">
+      <label for="profileUrl">Profile URL</label>
+      <input id="profileUrl" type="url" placeholder="https://x.com/username">
+      <label class="check"><input id="includeQuoted" type="checkbox"> Include quoted tweets</label>
+      <div class="row">
+        <label for="maxTweets">Maximum tweets</label>
+        <input id="maxTweets" type="number" min="1" max="10000" value="500">
+      </div>
+      <div class="row">
+        <label for="scrollDelay">Scroll delay, ms</label>
+        <input id="scrollDelay" type="number" min="500" max="10000" value="1500">
+      </div>
+    </section>
 
-    <div class="row">
-      <label for="maxTweets">Maximum tweets</label>
-      <input id="maxTweets" type="number" min="1" max="10000" value="500">
-    </div>
+    <section id="booruOptions" hidden>
+      <label for="booruSite">Gallery</label>
+      <select id="booruSite">
+        <option value="danbooru">Danbooru</option>
+        <option value="gelbooru">Gelbooru</option>
+        <option value="rule34">Rule34</option>
+      </select>
+      <label for="tags">Tags (space-separated; use -tag to exclude)</label>
+      <input id="tags" type="text" placeholder="1girl blue_hair -comic">
+      <label for="blacklistTags">Blacklist tags (comma or space separated)</label>
+      <input id="blacklistTags" type="text" placeholder="loli, guro, watermark">
+      <div class="row">
+        <label for="maxPosts">Maximum posts</label>
+        <input id="maxPosts" type="number" min="1" max="5000" value="200">
+      </div>
+      <p class="hint">Only original file URLs are queued. Sites may omit or restrict original files.</p>
+    </section>
 
-    <div class="row">
-      <label for="scrollDelay">Scroll delay, ms</label>
-      <input id="scrollDelay" type="number" min="500" max="10000" value="1500">
-    </div>
+    <label class="check"><input id="organizeFolders" type="checkbox" checked> Organize downloads into folders</label>
 
     <div class="buttons">
+      <button id="openQueue" class="secondary">QUEUE</button>
       <button id="start">START</button>
       <button id="stop" class="secondary">STOP</button>
     </div>
 
     <div id="status" class="status">Ready</div>
-
     <div class="stats">
-      <div>Tweets scanned <span id="tweets">0</span></div>
-      <div>Images found <span id="found">0</span></div>
+      <div>Items found <span id="found">0</span></div>
       <div>Downloaded <span id="downloaded">0</span></div>
-      <div>Skipped <span id="skipped">0</span></div>
+      <div>Failed <span id="skipped">0</span></div>
+      <div>Queued <span id="queued">0</span></div>
     </div>
-
-    <div class="hint">
-      Open the extension while the X profile page is active, or enter a
-      profile URL above.
-    </div>
+    <div class="hint">Downloads continue in the background after this popup is closed. X feed scanning still requires its source tab to remain open.</div>
   </main>
-
   <script src="popup.js"></script>
 </body>
 </html>
