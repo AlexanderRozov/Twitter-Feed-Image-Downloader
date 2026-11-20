@@ -7,7 +7,8 @@ async function loadState(){
 function toggleSource(){const b=$("sourceMode").value==="booru";$("xOptions").hidden=b;$("booruOptions").hidden=!b;}
 function setStatus(v){$("status").textContent=v||"Ready";}
 function updateStats(s){if(!s)return;$("found").textContent=s.found??0;$("downloaded").textContent=s.downloaded??0;$("skipped").textContent=s.failed??0;$("queued").textContent=s.queued??0;}
-$("sourceMode").addEventListener("change",toggleSource);\n$("openQueue").addEventListener("click",()=>chrome.tabs.create({url:chrome.runtime.getURL("queue/queue.html")}));
+$("sourceMode").addEventListener("change",toggleSource);
+$("openQueue").addEventListener("click",()=>chrome.tabs.create({url:chrome.runtime.getURL("queue/queue.html")}));
 $("start").addEventListener("click",async()=>{
  if($("sourceMode").value==="booru"){
   const tags=$("tags").value.trim();if(!tags){setStatus("Enter at least one tag.");return;}
