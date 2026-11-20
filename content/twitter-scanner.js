@@ -112,20 +112,23 @@
         continue;
       }
 
-      seenImages.add(url);
       stats.imagesFound++;
-
-      chrome.runtime.sendMessage({
-        type: "DOWNLOAD_IMAGE",
-        url,
-        tweetId: id
-      }).then(result => {
-        if (result?.ok) stats.downloaded++;
-        else stats.skipped++;
-        sendStatus(`Downloading... ${stats.downloaded}/${stats.imagesFound}`);
-      }).catch(() => {
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: "DOWNLOAD_IMAGE",
+          url,
+          tweetId: id
+        });
+        if (result?.ok) {
+          seenImages.add(url);
+          stats.downloaded++;
+        } else {
+          stats.skipped++;
+        }
+      } catch {
         stats.skipped++;
-      });
+      }
+      sendStatus(`Queued/downloaded: ${stats.downloaded}/${stats.imagesFound}`);
     }
   }
 
