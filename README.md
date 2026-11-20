@@ -38,7 +38,8 @@ Credentials are stored in this browser profile's `chrome.storage.local` and are 
 
 ## Download folders
 The **Organize downloads into folders** checkbox controls the download path:
-- Enabled: files are grouped by source and, for Booru, up to three tags.
+- Disabled by default: files are saved directly in the browser's default download directory.
+- Enabled: X downloads are grouped under `X_Feed`; Booru downloads are grouped by source and the first positive tag from your search query (for example, `1girl armlet bare_shoulders` creates `Gelbooru/1girl`).
 - Disabled: files are saved directly in the browser's default download directory.
 
 ## Queue manager

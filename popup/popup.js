@@ -2,7 +2,7 @@ const $ = id => document.getElementById(id);
 async function loadState(){
  const s=await chrome.storage.local.get(["xdl_profileUrl","xdl_includeQuoted","xdl_maxTweets","xdl_scrollDelay","xdl_sourceMode","xdl_booruSite","xdl_tags","xdl_maxPosts","xdl_blacklist_tags","xdl_organize_folders","xdl_gelbooru_user_id","xdl_gelbooru_api_key","xdl_stats","xdl_status"]);
  $("profileUrl").value=s.xdl_profileUrl||"";$("includeQuoted").checked=s.xdl_includeQuoted??false;$("maxTweets").value=s.xdl_maxTweets??500;$("scrollDelay").value=s.xdl_scrollDelay??1500;
- $("sourceMode").value=s.xdl_sourceMode||"x";$("booruSite").value=s.xdl_booruSite||"danbooru";$("tags").value=s.xdl_tags||"";$("maxPosts").value=s.xdl_maxPosts??200;$("blacklistTags").value=s.xdl_blacklist_tags||"";$("gelbooruUserId").value=s.xdl_gelbooru_user_id||"";$("gelbooruApiKey").value=s.xdl_gelbooru_api_key||"";$("organizeFolders").checked=s.xdl_organize_folders!==false;toggleSource();updateStats(s.xdl_stats);setStatus(s.xdl_status||"Ready");
+ $("sourceMode").value=s.xdl_sourceMode||"x";$("booruSite").value=s.xdl_booruSite||"danbooru";$("tags").value=s.xdl_tags||"";$("maxPosts").value=s.xdl_maxPosts??200;$("blacklistTags").value=s.xdl_blacklist_tags||"";$("gelbooruUserId").value=s.xdl_gelbooru_user_id||"";$("gelbooruApiKey").value=s.xdl_gelbooru_api_key||"";$("organizeFolders").checked=s.xdl_organize_folders===true;toggleSource();updateStats(s.xdl_stats);setStatus(s.xdl_status||"Ready");
 }
 function toggleSource(){const b=$("sourceMode").value==="booru";$("xOptions").hidden=b;$("booruOptions").hidden=!b;toggleGelbooruCredentials();}
 function toggleGelbooruCredentials(){$("gelbooruCredentials").hidden=!($("sourceMode").value==="booru"&&$("booruSite").value==="gelbooru");}
