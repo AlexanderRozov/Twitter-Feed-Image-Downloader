@@ -20,7 +20,7 @@ $("start").addEventListener("click",async()=>{
  const profileUrl=$("profileUrl").value.trim();
  if(!/^https?:\/\/(www\.)?(x\.com|twitter\.com)\//i.test(profileUrl)){setStatus("Enter a valid X/Twitter profile URL.");return;}
  const maxTweets=Math.max(1,Math.min(10000,Number($("maxTweets").value)||500)),scrollDelay=Math.max(500,Math.min(10000,Number($("scrollDelay").value)||1500));
- await chrome.storage.local.set({xdl_sourceMode:"x",xdl_profileUrl:profileUrl,xdl_includeQuoted:$("includeQuoted").checked,xdl_maxTweets:maxTweets,xdl_scrollDelay:scrollDelay});
+ await chrome.storage.local.set({xdl_sourceMode:"x",xdl_profileUrl:profileUrl,xdl_includeQuoted:$("includeQuoted").checked,xdl_maxTweets:maxTweets,xdl_scrollDelay:scrollDelay,xdl_organize_folders:$("organizeFolders").checked});
  const target=new URL(profileUrl);target.search="";target.hash="";
  const tab=(await chrome.tabs.query({active:true,currentWindow:true}))[0];let tabId=tab?.id;
  if(!tab?.url||!/^https?:\/\/(www\.)?(x\.com|twitter\.com)\//i.test(tab.url)||!sameProfile(tab.url,target.href)){
