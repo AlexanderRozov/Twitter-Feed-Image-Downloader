@@ -39,6 +39,13 @@
       </select>
       <label for="tags">Tags (space-separated; use -tag to exclude)</label>
       <input id="tags" type="text" placeholder="1girl blue_hair -comic">
+      <section id="gelbooruCredentials" hidden>
+        <label for="gelbooruUserId">Gelbooru User ID</label>
+        <input id="gelbooruUserId" type="text" inputmode="numeric" placeholder="Your Gelbooru user ID">
+        <label for="gelbooruApiKey">Gelbooru API Key</label>
+        <input id="gelbooruApiKey" type="password" autocomplete="off" placeholder="Your Gelbooru API key">
+        <p class="hint">Required by Gelbooru for API access. Stored locally in this browser profile.</p>
+      </section>
       <label for="blacklistTags">Blacklist tags (comma or space separated)</label>
       <input id="blacklistTags" type="text" placeholder="loli, guro, watermark">
       <div class="row">
