@@ -1,102 +1,16 @@
-* { box-sizing: border-box; }
-
-body {
-  margin: 0;
-  width: 360px;
-  font-family: Arial, sans-serif;
-  background: #111;
-  color: #eee;
-}
-
-.container {
-  padding: 16px;
-}
-
-h1 {
-  margin: 0 0 16px;
-  font-size: 18px;
-}
-
-label {
-  display: block;
-  margin-bottom: 6px;
-  font-size: 12px;
-  color: #aaa;
-}
-
-input[type="url"],
-input[type="number"] {
-  width: 100%;
-  border: 1px solid #444;
-  border-radius: 6px;
-  padding: 9px;
-  background: #1c1c1c;
-  color: #fff;
-}
-
-.row {
-  margin-top: 12px;
-}
-
-.check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #ddd;
-}
-
-.buttons {
-  display: flex;
-  gap: 8px;
-  margin-top: 16px;
-}
-
-button {
-  flex: 1;
-  border: 0;
-  border-radius: 6px;
-  padding: 10px;
-  cursor: pointer;
-  background: #fff;
-  color: #000;
-  font-weight: 700;
-}
-
-button.secondary {
-  background: #333;
-  color: #fff;
-}
-
-.status {
-  margin-top: 12px;
-  min-height: 20px;
-  font-size: 12px;
-  color: #aaa;
-}
-
-.stats {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  margin-top: 12px;
-  font-size: 12px;
-}
-
-.stats div {
-  padding: 8px;
-  border-radius: 5px;
-  background: #1c1c1c;
-}
-
-.stats span {
-  float: right;
-  color: #fff;
-  font-weight: 700;
-}
-
-.hint {
-  margin-top: 14px;
-  font-size: 11px;
-  line-height: 1.4;
-  color: #777;
-}
+* { box-sizing:border-box; }
+body { margin:0; width:380px; font-family:Arial,sans-serif; background:#111; color:#eee; }
+.container { padding:16px; }
+h1 { margin:0 0 16px; font-size:18px; }
+label { display:block; margin:10px 0 6px; font-size:12px; color:#aaa; }
+input[type="url"],input[type="number"],input[type="text"],select { width:100%; border:1px solid #444; border-radius:6px; padding:9px; background:#1c1c1c; color:#fff; }
+.check { display:flex; align-items:center; gap:8px; color:#ddd; }
+.buttons { display:flex; gap:8px; margin-top:16px; }
+button { flex:1; border:0; border-radius:6px; padding:10px; cursor:pointer; background:#fff; color:#000; font-weight:700; }
+button.secondary { background:#333; color:#fff; }
+.status { margin-top:12px; min-height:20px; font-size:12px; color:#aaa; }
+.stats { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:12px; font-size:12px; }
+.stats div { padding:8px; border-radius:5px; background:#1c1c1c; }
+.stats span { float:right; color:#fff; font-weight:700; }
+.hint { margin-top:12px; font-size:11px; line-height:1.4; color:#888; }
+[hidden] { display:none !important; }
