@@ -1,109 +1,24 @@
-const activeDownloads = new Map();
-
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type !== "DOWNLOAD_IMAGE") {
-    return;
-  }
-
-  downloadImage(message.url, message.tweetId)
-    .then(() => sendResponse({ok: true}))
-    .catch(error => {
-      console.warn("Download failed:", error);
-      sendResponse({ok: false, error: error.message});
-    });
-
-  return true;
+const QUEUE_KEY="xdl_download_queue", STATE_KEY="xdl_booru_job", MAX_PARALLEL=3;
+let pumpRunning=false;
+chrome.runtime.onInstalled.addListener(()=>chrome.alarms.create("xdl_queue_pump",{periodInMinutes:1}));
+chrome.alarms.onAlarm.addListener(a=>{if(a.name==="xdl_queue_pump")pumpQueue();});
+chrome.runtime.onMessage.addListener((m,s,reply)=>{
+ if(m.type==="DOWNLOAD_IMAGE"){enqueue([{url:m.url,source:"x",postId:m.tweetId}]).then(()=>reply({ok:true})).catch(e=>reply({ok:false,error:e.message}));return true;}
+ if(m.type==="START_BOORU_SEARCH"){startBooruSearch(m.options).then(()=>reply({ok:true})).catch(e=>reply({ok:false,error:e.message}));return true;}
+ if(m.type==="STOP_BOORU_SEARCH"){stopBooruSearch().then(()=>reply({ok:true}));return true;}
 });
-
-async function downloadImage(url, tweetId) {
-  if (!url) throw new Error("Empty image URL.");
-
-  const parsed = new URL(url);
-
-  if (parsed.hostname !== "pbs.twimg.com") {
-    throw new Error("Blocked non-X media host.");
-  }
-
-  if (!parsed.pathname.includes("/media/")) {
-    throw new Error("URL is not X media.");
-  }
-
-  const originalName = parsed.pathname.split("/").pop() || `image-${tweetId}.jpg`;
-
-  // Keep the extension from the original media path.
-  let extension = "";
-  const pathMatch = originalName.match(/\.(jpg|jpeg|png|webp|gif)$/i);
-
-  if (pathMatch) {
-    extension = "." + pathMatch[1].toLowerCase();
-  } else {
-    const format = (parsed.searchParams.get("format") || "jpg").toLowerCase();
-    extension = ["jpg", "jpeg", "png", "webp", "gif"].includes(format)
-      ? "." + format
-      : ".jpg";
-  }
-
-  const safeTweetId = String(tweetId).replace(/[^0-9]/g, "");
-  const filename = `X_Feed/${safeTweetId}_${hashUrl(url)}${extension}`;
-
-  if (activeDownloads.has(url)) {
-    return activeDownloads.get(url);
-  }
-
-  const promise = new Promise((resolve, reject) => {
-    console.log("[XDL] Downloading:", url, "->", filename);
-
-    chrome.downloads.download(
-      {
-        url,
-        filename,
-        conflictAction: "uniquify",
-        saveAs: false
-      },
-      downloadId => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-
-        if (downloadId == null) {
-          reject(new Error("Chrome did not create a download."));
-          return;
-        }
-
-        const listener = (delta) => {
-          if (delta.id !== downloadId || !delta.state) return;
-
-          if (delta.state.current === "complete") {
-            chrome.downloads.onChanged.removeListener(listener);
-            resolve();
-          } else if (delta.state.current === "interrupted") {
-            chrome.downloads.onChanged.removeListener(listener);
-            reject(new Error("Download interrupted."));
-          }
-        };
-
-        chrome.downloads.onChanged.addListener(listener);
-      }
-    );
-  });
-
-  activeDownloads.set(url, promise);
-
-  try {
-    await promise;
-  } finally {
-    activeDownloads.delete(url);
-  }
-}
-
-function hashUrl(value) {
-  let hash = 2166136261;
-
-  for (let i = 0; i < value.length; i++) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-
-  return (hash >>> 0).toString(16);
-}
+chrome.downloads.onChanged.addListener(d=>{if(d.state)settleDownload(d.id,d.state.current,d.error?.current).catch(console.error);});
+async function getQueue(){const x=await chrome.storage.local.get(QUEUE_KEY);return Array.isArray(x[QUEUE_KEY])?x[QUEUE_KEY]:[];}
+async function setQueue(q){await chrome.storage.local.set({[QUEUE_KEY]:q});await updateStats();}
+async function enqueue(items){const q=await getQueue(),known=new Set(q.map(x=>x.url));for(const x of items)if(x.url&&!known.has(x.url)){q.push({...x,state:"pending",attempts:0,addedAt:Date.now()});known.add(x.url);}await setQueue(q);pumpQueue();}
+async function updateStats(){const q=await getQueue(),d=await chrome.storage.local.get("xdl_stats"),p=d.xdl_stats||{};const stats={found:p.found||0,downloaded:p.downloaded||0,failed:p.failed||0,queued:q.filter(x=>["pending","downloading"].includes(x.state)).length};await chrome.storage.local.set({xdl_stats:stats});chrome.runtime.sendMessage({type:"DOWNLOAD_STATUS",status:"Queue: "+stats.queued,stats}).catch(()=>{});}
+async function setStatus(status){await chrome.storage.local.set({xdl_status:status});const d=await chrome.storage.local.get("xdl_stats");chrome.runtime.sendMessage({type:"DOWNLOAD_STATUS",status,stats:d.xdl_stats||{}}).catch(()=>{});}
+function allowed(raw,source){try{const u=new URL(raw),h=u.hostname.toLowerCase();if(!/^https?:$/.test(u.protocol))return false;if(source==="x")return h==="pbs.twimg.com"&&u.pathname.includes("/media/");if(source==="danbooru")return h==="danbooru.donmai.us"||h.endsWith(".donmai.us");if(source==="gelbooru")return h==="gelbooru.com"||h.endsWith(".gelbooru.com");if(source==="rule34")return h==="rule34.xxx";return false;}catch{return false;}}
+function ext(raw){try{const u=new URL(raw),e=u.pathname.match(/\.(jpe?g|png|webp|gif|avif)$/i)?.[1]?.toLowerCase();return e==="jpeg"?"jpg":e||"jpg";}catch{return "jpg";}}
+function safe(v){return String(v||"image").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,80);}
+async function pumpQueue(){if(pumpRunning)return;pumpRunning=true;try{const q=await getQueue();let slots=Math.max(0,MAX_PARALLEL-q.filter(x=>x.state==="downloading").length);for(const item of q){if(!slots)break;if(item.state!=="pending"||(item.nextAttemptAt&&item.nextAttemptAt>Date.now()))continue;if(!allowed(item.url,item.source)){item.state="failed";item.error="URL host not allowed";continue;}item.state="downloading";item.attempts++;await setQueue(q);slots--;startDownload(item).catch(async e=>{const latest=await getQueue(),x=latest.find(y=>y.url===item.url);if(x){x.error=e.message;x.state=x.attempts<4?"pending":"failed";x.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,x.attempts));await setQueue(latest);}});}await setQueue(q);}finally{pumpRunning=false;}}
+async function startDownload(item){const folder=item.source==="x"?"X_Feed":item.source[0].toUpperCase()+item.source.slice(1),filename=folder+"/"+safe(item.postId||item.id||Date.now())+"."+ext(item.url);const id=await new Promise((resolve,reject)=>chrome.downloads.download({url:item.url,filename,conflictAction:"uniquify",saveAs:false},n=>{if(chrome.runtime.lastError)reject(new Error(chrome.runtime.lastError.message));else if(n==null)reject(new Error("Download was not created"));else resolve(n);}));const q=await getQueue(),x=q.find(y=>y.url===item.url);if(x){x.downloadId=id;await setQueue(q);}const [d]=await chrome.downloads.search({id});if(d?.state==="complete")await settleDownload(id,"complete");else if(d?.state==="interrupted")await settleDownload(id,"interrupted",d.error);}
+async function settleDownload(id,state,error){const q=await getQueue(),x=q.find(y=>y.downloadId===id);if(!x)return;if(state==="complete"){x.state="complete";x.completedAt=Date.now();const d=await chrome.storage.local.get("xdl_stats"),s=d.xdl_stats||{};s.downloaded=(s.downloaded||0)+1;await chrome.storage.local.set({xdl_stats:s});}else if(state==="interrupted"){x.error=error||"Download interrupted";if(x.attempts<4){x.state="pending";x.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,x.attempts));}else{x.state="failed";const d=await chrome.storage.local.get("xdl_stats"),s=d.xdl_stats||{};s.failed=(s.failed||0)+1;await chrome.storage.local.set({xdl_stats:s});}}else return;await setQueue(q);chrome.alarms.create("xdl_queue_pump",{when:Date.now()+Math.max(1000,(x.nextAttemptAt||Date.now())-Date.now())});}
+async function startBooruSearch(o){const site=o?.site,tags=String(o?.tags||"").trim(),max=Math.max(1,Math.min(5000,Number(o?.maxPosts)||200));if(!tags)throw Error("At least one tag is required");if(!["danbooru","gelbooru","rule34"].includes(site))throw Error("Unsupported gallery");await chrome.storage.local.set({[STATE_KEY]:{site,tags,max,cancelled:false,startedAt:Date.now()},xdl_stats:{found:0,downloaded:0,failed:0,queued:0}});await setStatus("Searching "+site+" for: "+tags);const posts=await fetchPosts(site,tags,max),items=posts.filter(p=>p.file_url&&!p.is_deleted&&!p.is_pending).map(p=>({url:p.file_url,source:site,postId:p.id}));if(!items.length)throw Error("No original files returned. Check tags, site access, or API availability.");const q=await getQueue(),known=new Set(q.map(x=>x.url));for(const x of items)if(!known.has(x.url)){q.push({...x,state:"pending",attempts:0,addedAt:Date.now()});known.add(x.url);}await chrome.storage.local.set({[QUEUE_KEY]:q,xdl_stats:{found:items.length,downloaded:0,failed:0,queued:q.length}});await setStatus("Found "+items.length+" original files; downloads continue in background.");pumpQueue();}
+async function stopBooruSearch(){const d=await chrome.storage.local.get(STATE_KEY);if(d[STATE_KEY])await chrome.storage.local.set({[STATE_KEY]:{...d[STATE_KEY],cancelled:true}});await setStatus("Search stopped; queued downloads remain active.");}
+async function fetchPosts(site,tags,max){const out=[],size=100;for(let page=0;out.length<max&&page<Math.ceil(max/size)+2;page++){const j=await chrome.storage.local.get(STATE_KEY);if(j[STATE_KEY]?.cancelled)break;let u;if(site==="danbooru"){u=new URL("https://danbooru.donmai.us/posts.json");u.searchParams.set("tags",tags);u.searchParams.set("limit",String(Math.min(size,max-out.length)));u.searchParams.set("page",String(page+1));}else{u=new URL(site==="gelbooru"?"https://gelbooru.com/index.php":"https://api.rule34.xxx/index.php");for(const [k,v] of Object.entries({page:"dapi",s:"post",q:"index",json:"1",limit:String(Math.min(size,max-out.length)),pid:String(page),tags}))u.searchParams.set(k,v);}const r=await fetch(u,{headers:{Accept:"application/json"}});if(!r.ok)throw Error(site+" API returned HTTP "+r.status);const data=await r.json(),posts=Array.isArray(data)?data:(Array.isArray(data?.post)?data.post:[]);if(!posts.length)break;out.push(...posts);if(posts.length<size)break;}return out.slice(0,max);}
