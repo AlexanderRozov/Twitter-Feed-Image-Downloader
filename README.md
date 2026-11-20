@@ -42,3 +42,13 @@ Already queued downloads continue after closing the popup or the source tab. The
 - This branch has not yet been integration-tested against current live APIs or in Chrome/Opera. Verify each gallery, long-running queue recovery, and X lazy loading before publishing.
 
 The extension does not bypass private-account controls, authentication barriers, or site restrictions.
+
+## Gelbooru API authentication (HTTP 401)
+Gelbooru may require API credentials for DAPI requests. If the extension reports HTTP 401:
+1. Sign in to Gelbooru.
+2. Open [Account Options](https://gelbooru.com/index.php?page=account&s=options).
+3. Find **API Access Credentials** near the bottom of the page.
+4. Copy both **User ID** and **API Key** into the Gelbooru credential fields in the extension popup.
+5. Select Gelbooru again and start the tag search.
+
+The extension sends these values as the documented `user_id` and `api_key` query parameters. Credentials are stored in this browser profile's `chrome.storage.local`; do not share screenshots or logs containing the API key. The extension cannot create credentials for you. A 401 after entering them usually means one value is missing/incorrect or Gelbooru is denying the request for another reason.
