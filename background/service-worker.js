@@ -1,6 +1,7 @@
 const QUEUE_KEY="xdl_download_queue",STATE_KEY="xdl_booru_job",SEEN_KEY="xdl_seen_urls",PAUSED_KEY="xdl_queue_paused",MAX_PARALLEL=3;
 let pumpRunning=false;
-chrome.runtime.onInstalled.addListener(()=>{chrome.alarms.create("xdl_queue_pump",{periodInMinutes:1});pumpQueue();});\nchrome.runtime.onStartup.addListener(()=>pumpQueue());
+chrome.runtime.onInstalled.addListener(()=>{chrome.alarms.create("xdl_queue_pump",{periodInMinutes:1});pumpQueue();});
+chrome.runtime.onStartup.addListener(()=>pumpQueue());
 chrome.alarms.onAlarm.addListener(a=>{if(a.name==="xdl_queue_pump")pumpQueue();});
 chrome.runtime.onMessage.addListener((m,s,reply)=>{
  const run=async()=>{switch(m.type){
