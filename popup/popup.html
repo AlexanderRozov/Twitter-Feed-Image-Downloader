@@ -39,6 +39,9 @@
       </select>
       <label for="tags">Tags (space-separated; use -tag to exclude)</label>
       <input id="tags" type="text" placeholder="1girl blue_hair -comic">
+      <label for="blacklistTags">Blacklist tags (comma or space separated)</label>
+      <input id="blacklistTags" type="text" placeholder="loli, guro, watermark">
+      <label class="check"><input id="organizeFolders" type="checkbox" checked> Organize downloads into folders</label>
       <div class="row">
         <label for="maxPosts">Maximum posts</label>
         <input id="maxPosts" type="number" min="1" max="5000" value="200">
@@ -47,6 +50,7 @@
     </section>
 
     <div class="buttons">
+      <button id="openQueue" class="secondary">QUEUE</button>
       <button id="start">START</button>
       <button id="stop" class="secondary">STOP</button>
     </div>
