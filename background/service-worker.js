@@ -9,7 +9,7 @@ chrome.runtime.onMessage.addListener((m,s,reply)=>{
  case "X_SCAN_INIT": await initializeXScan(m.options||{});return {ok:true};
  case "X_SCAN_BATCH": return await addXScanBatch(m.items||[]);
  case "X_SCAN_PROGRESS": await updateXScanProgress(m.stats||{});return {ok:true};
- case "X_SCAN_FINISH": return await finishXScan(m.reason||"completed");
+ case "X_SCAN_FINISH": {const result=await finishXScan(m.reason||"completed");if(s.tab?.id!=null)await detachXBackground(s.tab.id);return result;}
  case "X_SCAN_BACKGROUND_ATTACH": return await attachXBackground(m.tabId);
  case "X_SCAN_BACKGROUND_DETACH": return await detachXBackground(m.tabId);
  case "START_BOORU_SEARCH": await startBooruSearch(m.options);return {ok:true};
@@ -47,6 +47,7 @@ async function detachXBackground(tabId){
  await chrome.storage.local.set({[X_DEBUGGER_TABS_KEY]:ids});
  return {ok:true};
 }
+chrome.tabs.onRemoved.addListener(tabId=>{detachXBackground(tabId).catch(()=>{});});
 chrome.debugger.onDetach.addListener(source=>{
  if(source.tabId!=null)detachXBackground(source.tabId).catch(()=>{});
 });
