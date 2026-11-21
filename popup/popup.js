@@ -37,7 +37,7 @@ $("start").addEventListener("click",async()=>{
    const init=await chrome.runtime.sendMessage({type:"X_SCAN_INIT",options:{includeQuoted:$("includeQuoted").checked,maxTweets}});
    if(!init?.ok)throw new Error(init?.error||"Could not initialize scan");
    await chrome.scripting.executeScript({target:{tabId},files:["content/twitter-scanner.js"]});
-   await chrome.tabs.sendMessage(tabId,{type:"START_SCAN",options:{includeQuoted:$("includeQuoted").checked,maxTweets,scrollDelay,scrollStep:1.05,waitForFeedMs:400,settleDelay:100}});
+   await chrome.tabs.sendMessage(tabId,{type:"START_SCAN",options:{includeQuoted:$("includeQuoted").checked,maxTweets,scrollDelay,scrollStep:1.05,waitForFeedMs:scrollDelay,settleDelay:75}});
    setStatus("Fast collection started. Downloads begin after discovery.");
   }catch(e){setStatus("Cannot start scanner: "+e.message);}
 });
