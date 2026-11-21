@@ -30,7 +30,7 @@ $("start").addEventListener("click",async()=>{
  const startDateDisplay=$("startDate").value.trim();
  let startDate="";
  if(startMode==="date"){
-  const match=startDateDisplay.match(/^(\d{2})\\.(\d{2})\\.(\d{4})$/);
+  const match=startDateDisplay.match(/^(\d{2})\.(\d{2})\.(\d{4})$/);
   if(!match){setStatus("Enter the date in DD.MM.YYYY format.");return;}
   const day=Number(match[1]),month=Number(match[2]),year=Number(match[3]);
   const check=new Date(year,month-1,day);
