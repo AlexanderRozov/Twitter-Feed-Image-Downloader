@@ -12,7 +12,7 @@ button.secondary { background:#333; color:#fff; }
 .stats { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:12px; font-size:12px; }
 .stats div { padding:8px; border-radius:5px; background:#1c1c1c; }
 .stats span { float:right; color:#fff; font-weight:700; }
-.hint { margin-top:12px; font-size:11px; line-height:1.4; color:#888; }
+.hint { margin-top:8px; font-size:11px; line-height:1.4; color:#888; }
 [hidden] { display:none !important; }
 .row { display:flex; align-items:center; gap:10px; }
 .row label { flex:1; }
