@@ -36,6 +36,7 @@ async function addXScanBatch(items){
  const tweets=new Set(m.tweets||[]),known=m.items||{};let added=0;
  for(const item of items){
   if(!item||!item.url||!item.tweetId)continue;
+  tweets.add(String(item.tweetId));
   const key=xMediaKey(item.url);if(!key||known[key])continue;
   known[key]={url:normalizeXMediaUrl(item.url),source:"x",postId:String(item.tweetId),tweetId:String(item.tweetId),mediaKey:key,tags:[]};tweets.add(String(item.tweetId));added++;
  }
