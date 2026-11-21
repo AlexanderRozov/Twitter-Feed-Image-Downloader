@@ -22,6 +22,8 @@ $("start").addEventListener("click",async()=>{
  const profileUrl=$("profileUrl").value.trim();
  if(!/^https?:\/\/(www\.)?(x\.com|twitter\.com)\//i.test(profileUrl)){setStatus("Enter a valid X/Twitter profile URL.");return;}
  const maxTweets=Math.max(1,Math.min(10000,Number($("maxTweets").value)||500)),scrollDelay=Math.max(100,Math.min(5000,Number($("scrollDelay").value)||250)),backgroundMode=$("backgroundMode").checked;
+ let debuggerGranted=false;
+ if(backgroundMode){try{debuggerGranted=await chrome.permissions.request({permissions:["debugger"]});}catch(e){setStatus("Debugging permission unavailable: "+e.message);}}
  await chrome.storage.local.set({xdl_sourceMode:"x",xdl_profileUrl:profileUrl,xdl_includeQuoted:$("includeQuoted").checked,xdl_maxTweets:maxTweets,xdl_scrollDelay:scrollDelay,xdl_backgroundMode:backgroundMode,xdl_organize_folders:$("organizeFolders").checked});
  const target=new URL(profileUrl);target.search="";target.hash="";
  const tab=(await chrome.tabs.query({active:true,currentWindow:true}))[0];let tabId=tab?.id;
@@ -30,7 +32,9 @@ $("start").addEventListener("click",async()=>{
   await waitForTabComplete(tabId);
  }
  try{
-   if(backgroundMode){\n    const granted=await chrome.permissions.request({permissions:["debugger"]});\n    if(granted){const keep=await chrome.runtime.sendMessage({type:"X_SCAN_BACKGROUND_ATTACH",tabId});if(!keep?.ok)setStatus("Background keep-awake unavailable ("+(keep?.error||"unknown error")+"). Continuing with normal browser throttling.");}\n    else setStatus("Debugging permission denied. Continuing; minimized scanning may be throttled.");\n   }\n   const init=await chrome.runtime.sendMessage({type:"X_SCAN_INIT",options:{includeQuoted:$("includeQuoted").checked,maxTweets}});
+   if(debuggerGranted){const keep=await chrome.runtime.sendMessage({type:"X_SCAN_BACKGROUND_ATTACH",tabId});if(!keep?.ok)setStatus("Background keep-awake unavailable ("+(keep?.error||"unknown error")+"). Continuing with normal browser throttling.");}
+   else if(backgroundMode)setStatus("Debugging permission denied. Continuing; minimized scanning may be throttled.");
+   const init=await chrome.runtime.sendMessage({type:"X_SCAN_INIT",options:{includeQuoted:$("includeQuoted").checked,maxTweets}});
    if(!init?.ok)throw new Error(init?.error||"Could not initialize scan");
    await chrome.scripting.executeScript({target:{tabId},files:["content/twitter-scanner.js"]});
    await chrome.tabs.sendMessage(tabId,{type:"START_SCAN",options:{includeQuoted:$("includeQuoted").checked,maxTweets,scrollDelay,scrollStep:1.05,waitForFeedMs:400,settleDelay:100}});
