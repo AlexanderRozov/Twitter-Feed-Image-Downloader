@@ -1,5 +1,5 @@
 const QUEUE_KEY="xdl_download_queue",STATE_KEY="xdl_booru_job",PAUSED_KEY="xdl_queue_paused",MAX_PARALLEL=3;
-let pumpRunning=false;
+let pumpRunning=false,pumpRequested=false;
 chrome.runtime.onInstalled.addListener(()=>{chrome.alarms.create("xdl_queue_pump",{periodInMinutes:1});recoverQueue().catch(console.error);});
 chrome.runtime.onStartup.addListener(()=>recoverQueue().catch(console.error));
 chrome.alarms.onAlarm.addListener(a=>{if(a.name==="xdl_queue_pump")pumpQueue();});
@@ -72,16 +72,22 @@ async function initializeXScan(options){
 async function addXScanBatch(items){
  const data=await chrome.storage.local.get(X_SCAN_KEY),m=data[X_SCAN_KEY];
  if(!m||m.status!=="discovering")return {ok:false,error:"No active X discovery session"};
- const tweets=new Set(m.tweets||[]),known=m.items||{};let added=0;
+ const tweets=new Set(m.tweets||[]),known=m.items||{},discovered=[];let added=0;
  for(const item of items){
   if(!item||!item.url||!item.tweetId)continue;
   tweets.add(String(item.tweetId));
-  const key=xMediaKey(item.url);if(!key||known[key])continue;
-  known[key]={url:normalizeXMediaUrl(item.url),source:"x",postId:String(item.tweetId),tweetId:String(item.tweetId),mediaKey:key,tags:[]};tweets.add(String(item.tweetId));added++;
+  const normalized=normalizeXMediaUrl(item.url),key=xMediaKey(normalized);if(!key||known[key])continue;
+  const entry={url:normalized,source:"x",postId:String(item.tweetId),tweetId:String(item.tweetId),mediaKey:key,tags:[]};
+  known[key]=entry;discovered.push(entry);added++;
  }
  m.tweets=[...tweets];m.items=known;m.updatedAt=Date.now();
  await chrome.storage.local.set({[X_SCAN_KEY]:m});
- return {ok:true,added,total:Object.keys(known).length,tweets:tweets.size};
+ // Enqueue each discovered batch immediately; don't wait for the full feed scan to finish.
+ const queued=discovered.length?await enqueue(discovered):{added:0,retried:0,total:(await getQueue()).length};
+ const statsData=await chrome.storage.local.get("xdl_stats"),previous=statsData.xdl_stats||{};
+ await chrome.storage.local.set({xdl_stats:{...previous,found:Object.keys(known).length}});
+ await updateStats();
+ return {ok:true,added,total:Object.keys(known).length,tweets:tweets.size,queued:queued.added||0,queueTotal:queued.total||0};
 }
 function normalizeXMediaUrl(raw){
  try{const u=new URL(raw);const format=u.searchParams.get("format");u.search="";if(format)u.searchParams.set("format",format);u.searchParams.set("name","orig");return u.href;}catch{return raw;}
@@ -133,7 +139,7 @@ function allowed(raw,source){try{const u=new URL(raw),h=u.hostname.toLowerCase()
 function ext(raw){try{const u=new URL(raw),e=u.pathname.match(/\.(jpe?g|png|webp|gif|avif)$/i)?.[1]?.toLowerCase();return e==="jpeg"?"jpg":e||"jpg";}catch{return "jpg";}}
 function safe(v){return String(v||"image").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,80);}
 async function pumpQueue(){
- if(pumpRunning)return;
+ if(pumpRunning){pumpRequested=true;return;}
  pumpRunning=true;
  try{
   const settings=await chrome.storage.local.get(PAUSED_KEY);if(settings[PAUSED_KEY])return;
@@ -161,7 +167,10 @@ async function pumpQueue(){
     }
    }
   }
- }finally{pumpRunning=false;}
+ }finally{
+  pumpRunning=false;
+  if(pumpRequested){pumpRequested=false;queueMicrotask(()=>pumpQueue());}
+ }
 }
 async function startDownload(item){const organize=(await chrome.storage.local.get("xdl_organize_folders")).xdl_organize_folders===true;const sourceFolder=item.source==="x"?"X_Feed":item.source[0].toUpperCase()+item.source.slice(1);const tagFolder=safe(item.folderTag||"");const folder=organize?(item.source==="x"?sourceFolder:sourceFolder+(tagFolder?"/"+tagFolder:"")):"";const filename=(folder?folder+"/":"")+safe(item.postId||item.id||Date.now())+"."+ext(item.url);const id=await new Promise((resolve,reject)=>chrome.downloads.download({url:item.url,filename,conflictAction:"uniquify",saveAs:false},n=>{if(chrome.runtime.lastError)reject(new Error(chrome.runtime.lastError.message));else if(n==null)reject(new Error("Download was not created"));else resolve(n);}));const q=await getQueue(),x=q.find(y=>(y.key||dedupeKey(y.url))===(item.key||dedupeKey(item.url)));if(x){x.downloadId=id;await setQueue(q);}const [d]=await chrome.downloads.search({id});if(d?.state==="complete")await settleDownload(id,"complete");else if(d?.state==="interrupted")await settleDownload(id,"interrupted",d.error);}
 async function settleDownload(id,state,error){const q=await getQueue(),x=q.find(y=>y.downloadId===id);if(!x)return;if(state==="complete"){x.state="complete";x.completedAt=Date.now();}else if(state==="interrupted"){x.error=error||"Download interrupted";if(x.attempts<4){x.state="pending";x.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,x.attempts));}else x.state="failed";}else return;await setQueue(q);chrome.alarms.create("xdl_queue_pump",{when:Date.now()+Math.max(1000,(x.nextAttemptAt||Date.now())-Date.now())});}
