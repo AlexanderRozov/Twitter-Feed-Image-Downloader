@@ -1,5 +1,5 @@
 const QUEUE_KEY="xdl_download_queue",STATE_KEY="xdl_booru_job",PAUSED_KEY="xdl_queue_paused",MAX_PARALLEL=3;
-let pumpRunning=false;
+let pumpRunning=false,pumpRequested=false;
 chrome.runtime.onInstalled.addListener(()=>{chrome.alarms.create("xdl_queue_pump",{periodInMinutes:1});recoverQueue().catch(console.error);});
 chrome.runtime.onStartup.addListener(()=>recoverQueue().catch(console.error));
 chrome.alarms.onAlarm.addListener(a=>{if(a.name==="xdl_queue_pump")pumpQueue();});
@@ -139,7 +139,7 @@ function allowed(raw,source){try{const u=new URL(raw),h=u.hostname.toLowerCase()
 function ext(raw){try{const u=new URL(raw),e=u.pathname.match(/\.(jpe?g|png|webp|gif|avif)$/i)?.[1]?.toLowerCase();return e==="jpeg"?"jpg":e||"jpg";}catch{return "jpg";}}
 function safe(v){return String(v||"image").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,80);}
 async function pumpQueue(){
- if(pumpRunning)return;
+ if(pumpRunning){pumpRequested=true;return;}
  pumpRunning=true;
  try{
   const settings=await chrome.storage.local.get(PAUSED_KEY);if(settings[PAUSED_KEY])return;
@@ -167,7 +167,10 @@ async function pumpQueue(){
     }
    }
   }
- }finally{pumpRunning=false;}
+ }finally{
+  pumpRunning=false;
+  if(pumpRequested){pumpRequested=false;queueMicrotask(()=>pumpQueue());}
+ }
 }
 async function startDownload(item){const organize=(await chrome.storage.local.get("xdl_organize_folders")).xdl_organize_folders===true;const sourceFolder=item.source==="x"?"X_Feed":item.source[0].toUpperCase()+item.source.slice(1);const tagFolder=safe(item.folderTag||"");const folder=organize?(item.source==="x"?sourceFolder:sourceFolder+(tagFolder?"/"+tagFolder:"")):"";const filename=(folder?folder+"/":"")+safe(item.postId||item.id||Date.now())+"."+ext(item.url);const id=await new Promise((resolve,reject)=>chrome.downloads.download({url:item.url,filename,conflictAction:"uniquify",saveAs:false},n=>{if(chrome.runtime.lastError)reject(new Error(chrome.runtime.lastError.message));else if(n==null)reject(new Error("Download was not created"));else resolve(n);}));const q=await getQueue(),x=q.find(y=>(y.key||dedupeKey(y.url))===(item.key||dedupeKey(item.url)));if(x){x.downloadId=id;await setQueue(q);}const [d]=await chrome.downloads.search({id});if(d?.state==="complete")await settleDownload(id,"complete");else if(d?.state==="interrupted")await settleDownload(id,"interrupted",d.error);}
 async function settleDownload(id,state,error){const q=await getQueue(),x=q.find(y=>y.downloadId===id);if(!x)return;if(state==="complete"){x.state="complete";x.completedAt=Date.now();}else if(state==="interrupted"){x.error=error||"Download interrupted";if(x.attempts<4){x.state="pending";x.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,x.attempts));}else x.state="failed";}else return;await setQueue(q);chrome.alarms.create("xdl_queue_pump",{when:Date.now()+Math.max(1000,(x.nextAttemptAt||Date.now())-Date.now())});}

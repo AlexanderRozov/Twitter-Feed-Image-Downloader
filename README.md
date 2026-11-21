@@ -52,7 +52,7 @@ Already queued downloads continue after closing the popup or the source tab. The
 
 **X scanning and downloads run incrementally:** the extension scrolls the feed, collects unique posts and original image URLs, and adds each discovered batch to the persistent background download queue immediately. You can open the queue while scanning is still running; downloads continue independently after discovery.
 
-The scanner uses small automatic scroll steps and tracks unique tweet IDs rather than relying only on document height. It retries up to eight scan passes when a tweet's media has not lazy-loaded yet, reducing missed images on slower connections. Images are deduplicated by X media ID (and format), not just by the full CDN URL. The manifest is stored in `chrome.storage.local` under `xdl_x_scan_manifest`.
+The scanner uses small automatic scroll steps and tracks unique tweet IDs rather than relying only on document height. It retries across repeated scan rounds when a tweet's media has not lazy-loaded yet, reducing missed images on slower connections. Images are deduplicated by X media ID (and format), not just by the full CDN URL. The manifest is stored in `chrome.storage.local` under `xdl_x_scan_manifest`.
 
 **Important:** X can change its DOM, lazy-loading behavior, and feed limits. The requested count is a target for unique top-level tweets encountered, not a guarantee that every historical post is available.
 
