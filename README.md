@@ -3,7 +3,7 @@
 Manifest V3 Chromium extension for downloading original-size media from X/Twitter and tag-based Booru galleries.
 
 ## Sources
-- X / Twitter profile feed. The source tab must remain open while discovering new posts.
+- X / Twitter profile feed. The source tab must remain open while discovering new posts. An experimental debugger-backed mode can reduce throttling when the browser is minimized.
 - Danbooru
 - Gelbooru
 - Rule34
