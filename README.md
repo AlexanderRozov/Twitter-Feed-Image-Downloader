@@ -52,7 +52,7 @@ Already queued downloads continue after closing the popup or the source tab. The
 
 **X scanning is two-phase:** the extension first scrolls the feed and collects the requested number of unique posts and original image URLs into a persistent scan manifest. Only after collection finishes (or is stopped) are the images added to the background download queue. Keep the X tab open until collection finishes; downloads then continue independently.
 
-The scanner uses small automatic scroll steps and tracks unique tweet IDs rather than relying only on document height. It retries a few times when a tweet's media has not lazy-loaded yet. Images are deduplicated by X media ID (and format), not just by the full CDN URL. The manifest is stored in `chrome.storage.local` under `xdl_x_scan_manifest`.
+The scanner uses small automatic scroll steps and tracks unique tweet IDs rather than relying only on document height. It retries up to eight scan passes when a tweet's media has not lazy-loaded yet, reducing missed images on slower connections. Images are deduplicated by X media ID (and format), not just by the full CDN URL. The manifest is stored in `chrome.storage.local` under `xdl_x_scan_manifest`.
 
 **Important:** X can change its DOM, lazy-loading behavior, and feed limits. The requested count is a target for unique top-level tweets encountered, not a guarantee that every historical post is available.
 
@@ -70,7 +70,7 @@ The extension does not bypass private-account controls, authentication barriers,
 
 The X scanner now uses mutation-driven waits instead of two fixed sleeps per scroll. Its default fast profile scrolls about one viewport at a time, waits for X to insert new cards (up to 400 ms), then captures media. The popup exposes a lower scroll-delay setting (default 250 ms).
 
-An optional **Try to keep scanning active when the browser is minimized** mode requests the `debugger` permission at scan start. When granted, the extension attaches to the X tab and asks Chromium DevTools Protocol to keep the page lifecycle active and emulate focus; it detaches when scanning finishes. This is experimental and may show Chrome's debugging notification. It can reduce lifecycle throttling, but Chromium may still throttle rendering/timers for occluded or minimized windows. No extension can guarantee full-speed DOM rendering in every browser configuration.
+An optional **Try to keep scanning active when the browser is minimized** mode requests the `debugger` permission at scan start. When granted, the extension attaches to the X tab and asks Chromium DevTools Protocol to keep the page lifecycle active and emulate focus; it detaches when scanning finishes or scanner startup fails. This is experimental and may show Chrome's debugging notification. It can reduce some lifecycle throttling, but Chromium may still throttle rendering/timers for occluded or minimized windows. Permission denial or an unsupported debugger command does not stop scanning: the extension falls back to normal mode and reports the limitation in the popup. No extension can guarantee full-speed DOM rendering in every browser configuration.
 
 For maximum predictable speed on Chromium, launch the browser with these flags (use a separate profile if you do not want to affect your normal browser session):
 

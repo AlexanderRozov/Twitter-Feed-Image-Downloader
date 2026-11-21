@@ -22,8 +22,8 @@ $("start").addEventListener("click",async()=>{
  const profileUrl=$("profileUrl").value.trim();
  if(!/^https?:\/\/(www\.)?(x\.com|twitter\.com)\//i.test(profileUrl)){setStatus("Enter a valid X/Twitter profile URL.");return;}
  const maxTweets=Math.max(1,Math.min(10000,Number($("maxTweets").value)||500)),scrollDelay=Math.max(100,Math.min(5000,Number($("scrollDelay").value)||250)),backgroundMode=$("backgroundMode").checked;
- let debuggerGranted=false;
- if(backgroundMode){try{debuggerGranted=await chrome.permissions.request({permissions:["debugger"]});}catch(e){setStatus("Debugging permission unavailable: "+e.message);}}
+ let debuggerGranted=false,debuggerAttached=false,backgroundNotice="";
+ if(backgroundMode){try{debuggerGranted=await chrome.permissions.request({permissions:["debugger"]});if(!debuggerGranted)backgroundNotice="Background optimization was not granted; Chromium may throttle minimized tabs.";}catch(e){backgroundNotice="Background optimization unavailable ("+e.message+"); using normal scanning.";}}
  await chrome.storage.local.set({xdl_sourceMode:"x",xdl_profileUrl:profileUrl,xdl_includeQuoted:$("includeQuoted").checked,xdl_maxTweets:maxTweets,xdl_scrollDelay:scrollDelay,xdl_backgroundMode:backgroundMode,xdl_organize_folders:$("organizeFolders").checked});
  const target=new URL(profileUrl);target.search="";target.hash="";
  const tab=(await chrome.tabs.query({active:true,currentWindow:true}))[0];let tabId=tab?.id;
@@ -32,14 +32,13 @@ $("start").addEventListener("click",async()=>{
   await waitForTabComplete(tabId);
  }
  try{
-   if(debuggerGranted){const keep=await chrome.runtime.sendMessage({type:"X_SCAN_BACKGROUND_ATTACH",tabId});if(!keep?.ok)setStatus("Background keep-awake unavailable ("+(keep?.error||"unknown error")+"). Continuing with normal browser throttling.");}
-   else if(backgroundMode)setStatus("Debugging permission denied. Continuing; minimized scanning may be throttled.");
+   if(debuggerGranted){const keep=await chrome.runtime.sendMessage({type:"X_SCAN_BACKGROUND_ATTACH",tabId});debuggerAttached=keep?.ok===true;if(!debuggerAttached)backgroundNotice="Background optimization unavailable ("+(keep?.error||"unknown error")+"); using normal scanning.";}
    const init=await chrome.runtime.sendMessage({type:"X_SCAN_INIT",options:{includeQuoted:$("includeQuoted").checked,maxTweets}});
    if(!init?.ok)throw new Error(init?.error||"Could not initialize scan");
    await chrome.scripting.executeScript({target:{tabId},files:["content/twitter-scanner.js"]});
    await chrome.tabs.sendMessage(tabId,{type:"START_SCAN",options:{includeQuoted:$("includeQuoted").checked,maxTweets,scrollDelay,scrollStep:1.05,waitForFeedMs:scrollDelay,settleDelay:75}});
-   setStatus("Fast collection started. Downloads begin after discovery.");
-  }catch(e){setStatus("Cannot start scanner: "+e.message);}
+   setStatus("Fast collection started. Downloads begin after discovery."+(backgroundNotice?" "+backgroundNotice:""));
+  }catch(e){if(debuggerAttached&&tabId!=null)await chrome.runtime.sendMessage({type:"X_SCAN_BACKGROUND_DETACH",tabId}).catch(()=>{});setStatus("Cannot start scanner: "+e.message);}
 });
 $("stop").addEventListener("click",async()=>{
  try{await chrome.runtime.sendMessage({type:"STOP_BOORU_SEARCH"});const tabs=await chrome.tabs.query({url:["https://x.com/*","https://twitter.com/*"]});for(const t of tabs){try{await chrome.tabs.sendMessage(t.id,{type:"STOP_SCAN"});}catch{}}setStatus("Stop requested.");}catch(e){setStatus("Stop failed: "+e.message);}
@@ -47,5 +46,5 @@ $("stop").addEventListener("click",async()=>{
 chrome.runtime.onMessage.addListener(m=>{if(m.type==="SCAN_STATUS"||m.type==="DOWNLOAD_STATUS"){setStatus(m.status);updateStats(m.stats);}});
 chrome.storage.onChanged.addListener((c,a)=>{if(a!=="local")return;if(c.xdl_stats)updateStats(c.xdl_stats.newValue);if(c.xdl_status)setStatus(c.xdl_status.newValue);});
 function sameProfile(a,b){try{const x=new URL(a),y=new URL(b);return x.hostname.replace("www.","")===y.hostname.replace("www.","")&&x.pathname.replace(/\/+$/,"")===y.pathname.replace(/\/+$/,"");}catch{return false;}}
-function waitForTabComplete(id){return new Promise(resolve=>{const timeout=setTimeout(()=>{chrome.tabs.onUpdated.removeListener(listener);resolve();},20000);function listener(tabId,info){if(tabId===id&&info.status==="complete"){clearTimeout(timeout);chrome.tabs.onUpdated.removeListener(listener);setTimeout(resolve,1000);}}chrome.tabs.onUpdated.addListener(listener);});}
+async function waitForTabComplete(id){const current=await chrome.tabs.get(id);if(current.status==="complete"){await new Promise(resolve=>setTimeout(resolve,1000));return;}return new Promise(resolve=>{let done=false;const finish=()=>{if(done)return;done=true;clearTimeout(timeout);chrome.tabs.onUpdated.removeListener(listener);resolve();};const timeout=setTimeout(finish,20000);function listener(tabId,info){if(tabId===id&&info.status==="complete"){chrome.tabs.onUpdated.removeListener(listener);setTimeout(finish,1000);}}chrome.tabs.onUpdated.addListener(listener);});}
 loadState();

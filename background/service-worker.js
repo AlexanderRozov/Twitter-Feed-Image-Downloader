@@ -1,7 +1,7 @@
 const QUEUE_KEY="xdl_download_queue",STATE_KEY="xdl_booru_job",SEEN_KEY="xdl_seen_urls",PAUSED_KEY="xdl_queue_paused",MAX_PARALLEL=3;
 let pumpRunning=false;
-chrome.runtime.onInstalled.addListener(()=>{chrome.alarms.create("xdl_queue_pump",{periodInMinutes:1});pumpQueue();});
-chrome.runtime.onStartup.addListener(()=>pumpQueue());
+chrome.runtime.onInstalled.addListener(()=>{chrome.alarms.create("xdl_queue_pump",{periodInMinutes:1});recoverQueue().catch(console.error);});
+chrome.runtime.onStartup.addListener(()=>recoverQueue().catch(console.error));
 chrome.alarms.onAlarm.addListener(a=>{if(a.name==="xdl_queue_pump")pumpQueue();});
 chrome.runtime.onMessage.addListener((m,s,reply)=>{
  const run=async()=>{switch(m.type){
@@ -26,6 +26,18 @@ chrome.runtime.onMessage.addListener((m,s,reply)=>{
  run().then(reply).catch(e=>reply({ok:false,error:e.message}));return true;
 });
 chrome.downloads.onChanged.addListener(d=>{if(d.state)settleDownload(d.id,d.state.current,d.error?.current).catch(console.error);});
+async function recoverQueue(){
+ const q=await getQueue();let changed=false;
+ for(const item of q){
+  if(item.state!=="downloading")continue;
+  if(!Number.isInteger(item.downloadId)){item.state="pending";item.nextAttemptAt=0;item.error="Recovered after browser restart";changed=true;continue;}
+  const matches=await chrome.downloads.search({id:item.downloadId});const download=matches[0];
+  if(download?.state==="complete"){item.state="complete";item.completedAt=Date.now();changed=true;}
+  else if(download?.state==="interrupted"){item.error=download.error||"Download interrupted";item.state=item.attempts<4?"pending":"failed";item.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,item.attempts));changed=true;}
+  else if(!download){item.state="pending";item.downloadId=null;item.nextAttemptAt=0;item.error="Download was not found after browser restart";changed=true;}
+ }
+ if(changed)await setQueue(q);pumpQueue();
+}
 const X_DEBUGGER_TABS_KEY="xdl_debugger_tab_ids";
 async function attachXBackground(tabId){
  if(!Number.isInteger(tabId))return {ok:false,error:"Invalid X tab ID"};
