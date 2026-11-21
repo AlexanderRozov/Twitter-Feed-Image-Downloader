@@ -29,7 +29,13 @@ $("start").addEventListener("click",async()=>{
   if(tabId==null){const created=await chrome.tabs.create({url:target.href,active:false});tabId=created.id;}else await chrome.tabs.update(tabId,{url:target.href});
   await waitForTabComplete(tabId);
  }
- try{await chrome.scripting.executeScript({target:{tabId},files:["content/twitter-scanner.js"]});await chrome.tabs.sendMessage(tabId,{type:"START_SCAN",options:{includeQuoted:$("includeQuoted").checked,maxTweets,scrollDelay}});setStatus("Scanning X feed. Keep the tab open.");}catch(e){setStatus("Cannot start scanner: "+e.message);}
+ try{
+   const init=await chrome.runtime.sendMessage({type:"X_SCAN_INIT",options:{includeQuoted:$("includeQuoted").checked,maxTweets}});
+   if(!init?.ok)throw new Error(init?.error||"Could not initialize scan");
+   await chrome.scripting.executeScript({target:{tabId},files:["content/twitter-scanner.js"]});
+   await chrome.tabs.sendMessage(tabId,{type:"START_SCAN",options:{includeQuoted:$("includeQuoted").checked,maxTweets,scrollDelay}});
+   setStatus("Collecting posts first. Downloads will start after collection.");
+  }catch(e){setStatus("Cannot start scanner: "+e.message);}
 });
 $("stop").addEventListener("click",async()=>{
  try{await chrome.runtime.sendMessage({type:"STOP_BOORU_SEARCH"});const tabs=await chrome.tabs.query({url:["https://x.com/*","https://twitter.com/*"]});for(const t of tabs){try{await chrome.tabs.sendMessage(t.id,{type:"STOP_SCAN"});}catch{}}setStatus("Stop requested.");}catch(e){setStatus("Stop failed: "+e.message);}
