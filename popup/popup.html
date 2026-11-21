@@ -20,8 +20,24 @@
       <label for="profileUrl">Profile URL</label>
       <input id="profileUrl" type="url" placeholder="https://x.com/username">
       <label class="check"><input id="includeQuoted" type="checkbox"> Include quoted tweets</label>
+      <label for="startMode">Start collecting from</label>
+      <select id="startMode">
+        <option value="first">First post (default)</option>
+        <option value="number">Post number</option>
+        <option value="date">Date (DD.MM.YYYY)</option>
+      </select>
+      <div id="startNumberOptions" hidden>
+        <label for="startPostNumber">Post number in the profile feed</label>
+        <input id="startPostNumber" type="number" min="1" max="100000" value="1">
+        <p class="hint">Posts are counted from the top of the loaded profile feed. The selected post is included.</p>
+      </div>
+      <div id="startDateOptions" hidden>
+        <label for="startDate">Start date (DD.MM.YYYY)</label>
+        <input id="startDate" type="text" inputmode="numeric" placeholder="20.11.2026" pattern="\\d{2}\.\\d{2}\.\\d{4}">
+        <p class="hint">The first post on this date or older is included. Dates are interpreted in your browser's local time zone.</p>
+      </div>
       <div class="row">
-        <label for="maxTweets">Posts to collect before downloading</label>
+        <label for="maxTweets">Posts to collect after start point</label>
         <input id="maxTweets" type="number" min="1" max="10000" value="500">
       </div>
       <div class="row">
@@ -72,7 +88,7 @@
       <div>Failed <span id="skipped">0</span></div>
       <div>Queued <span id="queued">0</span></div>
     </div>
-    <div class="hint">X mode first collects the requested number of posts and unique original image URLs, then starts downloading. Keep the X tab open until collection finishes; downloads then continue in the background.</div>
+    <div class="hint">X mode collects unique original image URLs starting at the selected post/date and adds them to the download queue as it scans. Keep the X tab open until collection finishes; downloads then continue in the background.</div>
   </main>
   <script src="popup.js"></script>
 </body>

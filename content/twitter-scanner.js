@@ -6,6 +6,8 @@
   let running = false, stopRequested = false, options = {};
   let stats = { tweetsScanned: 0, imagesFound: 0, skipped: 0 };
   const seenTweets = new Set(), seenMedia = new Set(), noMediaRetries = new Map();
+  const encounteredTweets = new Set();
+  let startReached = false;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   function normalizeImageUrl(src) {
@@ -48,6 +50,53 @@
     }
     const dataId = article.getAttribute("data-tweet-id") || article.dataset?.tweetId;
     return dataId && /^\d+$/.test(dataId) ? dataId : null;
+  }
+
+  function getTweetDateKey(article) {
+    const raw = article.querySelector("time[datetime]")?.getAttribute("datetime");
+    if (!raw) return null;
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime())) return null;
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return year + "-" + month + "-" + day;
+  }
+
+  function shouldProcessFromStart(article, id) {
+    if (startReached) {
+      if (options.startMode === "date") {
+        const postDate = getTweetDateKey(article);
+        return !!postDate && postDate <= options.startDate;
+      }
+      return true;
+    }
+    if (!id || encounteredTweets.has(id)) return false;
+
+    if (options.startMode === "number") {
+      encounteredTweets.add(id);
+      if (encounteredTweets.size >= options.startPostNumber) {
+        startReached = true;
+        sendStatus("Start position reached at post #" + options.startPostNumber + ". Collecting images...");
+        return true;
+      }
+      return false;
+    }
+
+    if (options.startMode === "date") {
+      const postDate = getTweetDateKey(article);
+      if (!postDate) return false;
+      encounteredTweets.add(id);
+      if (postDate <= options.startDate) {
+        startReached = true;
+        sendStatus("Date reached (" + options.startDateDisplay + "). Collecting images from this post and older posts...");
+        return true;
+      }
+      return false;
+    }
+
+    startReached = true;
+    return true;
   }
 
   function collectImages(article) {
@@ -155,6 +204,8 @@
     for (const article of getArticles()) {
       if (stopRequested) break;
       if (!options.includeQuoted && isNestedTweet(article)) continue;
+      const id = getTweetId(article);
+      if (!shouldProcessFromStart(article, id)) continue;
       await processTweet(article, batch);
     }
     if (batch.length) {
@@ -172,12 +223,19 @@
     running = false;
     const result = await chrome.runtime.sendMessage({ type: "X_SCAN_FINISH", reason }).catch(error => ({ ok: false, error: error.message }));
     if (!result?.ok) sendStatus("Scan finished, but queue finalization failed: " + (result?.error || "unknown error"));
-    else sendStatus("Collection " + (reason === "stopped" ? "stopped" : "complete") +
-      ": " + result.tweets + " posts, " + result.images + " images. Downloads are in the queue.");
+    else if (!startReached && reason !== "stopped") {
+      sendStatus("Start position was not found in the loaded feed. Try an earlier date or a smaller post number.");
+    } else {
+      sendStatus("Collection " + (reason === "stopped" ? "stopped" : "complete") +
+        ": " + result.tweets + " posts, " + result.images + " images. Downloads are in the queue.");
+    }
   }
 
   async function scanLoop() {
-    sendStatus("Scanner started. Looking for posts and images...");
+    const startDescription = options.startMode === "number"
+      ? "post #" + options.startPostNumber
+      : options.startMode === "date" ? "date " + options.startDateDisplay : "the first post";
+    sendStatus("Scanner started. Searching for " + startDescription + "...");
     let stagnantRounds = 0, lastUniqueCount = 0, lastScrollY = window.scrollY;
     let scrollAttempts = 0;
     while (running && !stopRequested) {
@@ -192,12 +250,12 @@
 
       const count = seenTweets.size;
       const currentY = window.scrollY;
-      const madeProgress = count !== lastUniqueCount;
+      const madeProgress = count !== lastUniqueCount || encounteredTweets.size > lastUniqueCount;
       const moved = scroll.moved || Math.abs(currentY - lastScrollY) > 20;
       if (madeProgress) stagnantRounds = 0;
       else if (!moved) stagnantRounds++;
-      else stagnantRounds = 0; // Keep scanning while the feed is still moving/loading.
-      lastUniqueCount = count;
+      else stagnantRounds = 0;
+      lastUniqueCount = Math.max(count, encounteredTweets.size);
       lastScrollY = currentY;
 
       sendStatus("Scrolling feed... posts: " + stats.tweetsScanned + "/" + options.maxTweets +
@@ -217,10 +275,18 @@
         maxTweets: Math.max(1, Math.min(10000, Number(message.options?.maxTweets) || 500)),
         scrollStep: Math.max(0.7, Math.min(1.5, Number(message.options?.scrollStep) || 1.05)),
         waitForFeedMs: Math.max(150, Math.min(2500, Number(message.options?.waitForFeedMs) || 500)),
-        settleDelay: Math.max(50, Math.min(1200, Number(message.options?.settleDelay) || 200))
+        settleDelay: Math.max(50, Math.min(1200, Number(message.options?.settleDelay) || 200)),
+        startMode: ["number", "date"].includes(message.options?.startMode) ? message.options.startMode : "first",
+        startPostNumber: Math.max(1, Math.min(100000, Number(message.options?.startPostNumber) || 1)),
+        startDate: String(message.options?.startDate || ""),
+        startDateDisplay: String(message.options?.startDateDisplay || "")
       };
+      if (options.startMode === "date" && !/^\d{4}-\d{2}-\d{2}$/.test(options.startDate)) {
+        throw new Error("Invalid start date. Expected DD.MM.YYYY.");
+      }
       stats = { tweetsScanned: 0, imagesFound: 0, skipped: 0 };
-      seenTweets.clear(); seenMedia.clear(); noMediaRetries.clear();
+      seenTweets.clear(); seenMedia.clear(); noMediaRetries.clear(); encounteredTweets.clear();
+      startReached = options.startMode === "first";
       running = true; stopRequested = false;
       scanLoop().catch(async error => {
         running = false;
