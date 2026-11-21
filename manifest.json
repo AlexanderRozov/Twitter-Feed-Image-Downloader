@@ -5,13 +5,12 @@
   "description": "Original-size image downloader for X/Twitter and Booru galleries with background-compatible scanning, tag filters and queue management.",
   "minimum_chrome_version": "120",
   "permissions": [
-    "activeTab",
+    "debugger",
+    "tabs",
+    "scripting",
     "downloads",
     "storage",
-    "scripting",
-    "tabs",
-    "alarms",
-    "unlimitedStorage"
+    "alarms"
   ],
   "host_permissions": [
     "https://x.com/*",
