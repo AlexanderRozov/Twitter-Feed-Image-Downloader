@@ -29,7 +29,7 @@
         <input id="scrollDelay" type="number" min="100" max="5000" value="250">
       </div>
       <label class="check"><input id="backgroundMode" type="checkbox" checked> Try to keep scanning active when browser is minimized</label>
-      <p class="hint">Experimental: requests temporary debugging access. Chromium may still throttle a minimized window. For more reliable speed, see README launch flags.</p>
+      <p class="hint">Optional experimental mode: asks Chromium for temporary debugging access. It can reduce some background throttling, but cannot guarantee full-speed scanning while minimized. If permission is denied or unsupported, scanning continues normally. See README for browser launch flags.</p>
     </section>
 
     <section id="booruOptions" hidden>
