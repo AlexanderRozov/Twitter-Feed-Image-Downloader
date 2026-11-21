@@ -50,7 +50,7 @@ The queue and duplicate index are stored in `chrome.storage.local`. A URL is ind
 ## Background behavior
 Already queued downloads continue after closing the popup or the source tab. The browser Downloads API performs the transfers; the Manifest V3 service worker wakes on download events and alarms to update state and retry interrupted transfers.
 
-**X scanning is two-phase:** the extension first scrolls the feed and collects the requested number of unique posts and original image URLs into a persistent scan manifest. Only after collection finishes (or is stopped) are the images added to the background download queue. Keep the X tab open until collection finishes; downloads then continue independently.
+**X scanning and downloads run incrementally:** the extension scrolls the feed, collects unique posts and original image URLs, and adds each discovered batch to the persistent background download queue immediately. You can open the queue while scanning is still running; downloads continue independently after discovery.
 
 The scanner uses small automatic scroll steps and tracks unique tweet IDs rather than relying only on document height. It retries up to eight scan passes when a tweet's media has not lazy-loaded yet, reducing missed images on slower connections. Images are deduplicated by X media ID (and format), not just by the full CDN URL. The manifest is stored in `chrome.storage.local` under `xdl_x_scan_manifest`.
 

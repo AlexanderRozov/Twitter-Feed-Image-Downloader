@@ -27,9 +27,13 @@ $("start").addEventListener("click",async()=>{
  await chrome.storage.local.set({xdl_sourceMode:"x",xdl_profileUrl:profileUrl,xdl_includeQuoted:$("includeQuoted").checked,xdl_maxTweets:maxTweets,xdl_scrollDelay:scrollDelay,xdl_backgroundMode:backgroundMode,xdl_organize_folders:$("organizeFolders").checked});
  const target=new URL(profileUrl);target.search="";target.hash="";
  const tab=(await chrome.tabs.query({active:true,currentWindow:true}))[0];let tabId=tab?.id;
- if(!tab?.url||!/^https?:\/\/(www\.)?(x\.com|twitter\.com)\//i.test(tab.url)||!sameProfile(tab.url,target.href)){
-  if(tabId==null){const created=await chrome.tabs.create({url:target.href,active:false});tabId=created.id;}else await chrome.tabs.update(tabId,{url:target.href});
+ if(tabId==null){const created=await chrome.tabs.create({url:target.href,active:false});tabId=created.id;await waitForTabComplete(tabId);}
+ else if(!tab?.url||!/^https?:\/\/(www\.)?(x\.com|twitter\.com)\//i.test(tab.url)||!sameProfile(tab.url,target.href)){
+  await chrome.tabs.update(tabId,{url:target.href});
   await waitForTabComplete(tabId);
+ }else{
+  // Reload the profile to discard any old injected scanner instance after an extension update.
+  await reloadTabAndWait(tabId);
  }
  try{
    if(debuggerGranted){const keep=await chrome.runtime.sendMessage({type:"X_SCAN_BACKGROUND_ATTACH",tabId});debuggerAttached=keep?.ok===true;if(!debuggerAttached)backgroundNotice="Background optimization unavailable ("+(keep?.error||"unknown error")+"); using normal scanning.";}
@@ -46,5 +50,7 @@ $("stop").addEventListener("click",async()=>{
 chrome.runtime.onMessage.addListener(m=>{if(m.type==="SCAN_STATUS"||m.type==="DOWNLOAD_STATUS"){setStatus(m.status);updateStats(m.stats);}});
 chrome.storage.onChanged.addListener((c,a)=>{if(a!=="local")return;if(c.xdl_stats)updateStats(c.xdl_stats.newValue);if(c.xdl_status)setStatus(c.xdl_status.newValue);});
 function sameProfile(a,b){try{const x=new URL(a),y=new URL(b);return x.hostname.replace("www.","")===y.hostname.replace("www.","")&&x.pathname.replace(/\/+$/,"")===y.pathname.replace(/\/+$/,"");}catch{return false;}}
-async function waitForTabComplete(id){const current=await chrome.tabs.get(id);if(current.status==="complete"){await new Promise(resolve=>setTimeout(resolve,1000));return;}return new Promise(resolve=>{let done=false;const finish=()=>{if(done)return;done=true;clearTimeout(timeout);chrome.tabs.onUpdated.removeListener(listener);resolve();};const timeout=setTimeout(finish,20000);function listener(tabId,info){if(tabId===id&&info.status==="complete"){chrome.tabs.onUpdated.removeListener(listener);setTimeout(finish,1000);}}chrome.tabs.onUpdated.addListener(listener);});}
+async function waitForTabComplete(id){const current=await chrome.tabs.get(id);if(current.status==="complete"){await new Promise(resolve=>setTimeout(resolve,800));return;}return waitForNextComplete(id);}
+async function waitForNextComplete(id){return new Promise(resolve=>{let done=false;const finish=()=>{if(done)return;done=true;clearTimeout(timeout);chrome.tabs.onUpdated.removeListener(listener);setTimeout(resolve,700);};const timeout=setTimeout(finish,30000);function listener(tabId,info){if(tabId===id&&info.status==="complete")finish();}chrome.tabs.onUpdated.addListener(listener);});}
+async function reloadTabAndWait(id){const loaded=waitForNextComplete(id);await chrome.tabs.reload(id);await loaded;}
 loadState();

@@ -72,16 +72,22 @@ async function initializeXScan(options){
 async function addXScanBatch(items){
  const data=await chrome.storage.local.get(X_SCAN_KEY),m=data[X_SCAN_KEY];
  if(!m||m.status!=="discovering")return {ok:false,error:"No active X discovery session"};
- const tweets=new Set(m.tweets||[]),known=m.items||{};let added=0;
+ const tweets=new Set(m.tweets||[]),known=m.items||{},discovered=[];let added=0;
  for(const item of items){
   if(!item||!item.url||!item.tweetId)continue;
   tweets.add(String(item.tweetId));
-  const key=xMediaKey(item.url);if(!key||known[key])continue;
-  known[key]={url:normalizeXMediaUrl(item.url),source:"x",postId:String(item.tweetId),tweetId:String(item.tweetId),mediaKey:key,tags:[]};tweets.add(String(item.tweetId));added++;
+  const normalized=normalizeXMediaUrl(item.url),key=xMediaKey(normalized);if(!key||known[key])continue;
+  const entry={url:normalized,source:"x",postId:String(item.tweetId),tweetId:String(item.tweetId),mediaKey:key,tags:[]};
+  known[key]=entry;discovered.push(entry);added++;
  }
  m.tweets=[...tweets];m.items=known;m.updatedAt=Date.now();
  await chrome.storage.local.set({[X_SCAN_KEY]:m});
- return {ok:true,added,total:Object.keys(known).length,tweets:tweets.size};
+ // Enqueue each discovered batch immediately; don't wait for the full feed scan to finish.
+ const queued=discovered.length?await enqueue(discovered):{added:0,retried:0,total:(await getQueue()).length};
+ const statsData=await chrome.storage.local.get("xdl_stats"),previous=statsData.xdl_stats||{};
+ await chrome.storage.local.set({xdl_stats:{...previous,found:Object.keys(known).length}});
+ await updateStats();
+ return {ok:true,added,total:Object.keys(known).length,tweets:tweets.size,queued:queued.added||0,queueTotal:queued.total||0};
 }
 function normalizeXMediaUrl(raw){
  try{const u=new URL(raw);const format=u.searchParams.get("format");u.search="";if(format)u.searchParams.set("format",format);u.searchParams.set("name","orig");return u.href;}catch{return raw;}

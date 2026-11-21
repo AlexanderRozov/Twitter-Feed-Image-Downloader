@@ -1,55 +1,127 @@
 (() => {
+  // This script is injected after a page reload so no stale scanner listener survives.
   if (window.__xdlScannerInstalled) return;
   window.__xdlScannerInstalled = true;
+
   let running = false, stopRequested = false, options = {};
   let stats = { tweetsScanned: 0, imagesFound: 0, skipped: 0 };
   const seenTweets = new Set(), seenMedia = new Set(), noMediaRetries = new Map();
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+  function normalizeImageUrl(src) {
+    if (!src) return null;
+    try {
+      const url = new URL(src, location.href);
+      if (url.hostname !== "pbs.twimg.com" || !url.pathname.includes("/media/")) return null;
+      const format = url.searchParams.get("format");
+      url.search = "";
+      if (format) url.searchParams.set("format", format);
+      url.searchParams.set("name", "orig");
+      return url.href;
+    } catch { return null; }
+  }
+
+  function mediaKey(url) {
+    try {
+      const parsed = new URL(url), match = parsed.pathname.match(/\/media\/([^/.?]+)/);
+      return match ? match[1] + ":" + (parsed.searchParams.get("format") || "") : null;
+    } catch { return null; }
+  }
+
+  function getArticles() {
+    let articles = [...document.querySelectorAll("article")];
+    if (!articles.length) {
+      articles = [...document.querySelectorAll('[data-testid="tweet"]')]
+        .map(node => node.closest("article") || node);
+    }
+    return [...new Set(articles)];
+  }
+
+  function isNestedTweet(article) {
+    return !!article.parentElement?.closest("article");
+  }
+
+  function getTweetId(article) {
+    for (const link of article.querySelectorAll("a[href*='/status/']")) {
+      const match = (link.href || link.getAttribute("href") || "").match(/\/status\/(\d+)/);
+      if (match) return match[1];
+    }
+    const dataId = article.getAttribute("data-tweet-id") || article.dataset?.tweetId;
+    return dataId && /^\d+$/.test(dataId) ? dataId : null;
+  }
+
+  function collectImages(article) {
+    const result = new Set();
+    for (const img of article.querySelectorAll("img")) {
+      for (const candidate of [img.currentSrc, img.src, img.getAttribute("src"), img.getAttribute("data-src")]) {
+        const normalized = normalizeImageUrl(candidate);
+        if (normalized) result.add(normalized);
+      }
+      const srcset = img.getAttribute("srcset") || "";
+      for (const entry of srcset.split(",")) {
+        const normalized = normalizeImageUrl(entry.trim().split(/\s+/)[0]);
+        if (normalized) result.add(normalized);
+      }
+    }
+    return [...result];
+  }
+
+  function findFeedScroller() {
+    const first = getArticles()[0];
+    for (let node = first?.parentElement; node && node !== document.body; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      const overflow = style.overflowY;
+      if ((overflow === "auto" || overflow === "scroll" || overflow === "overlay") &&
+          node.scrollHeight > node.clientHeight + 80) return node;
+    }
+    return document.scrollingElement || document.documentElement;
+  }
+
+  function scrollFeed() {
+    const scroller = findFeedScroller();
+    const amount = Math.max(650, Math.floor((scroller === document.scrollingElement
+      ? window.innerHeight : scroller.clientHeight) * options.scrollStep));
+    const before = scroller === document.scrollingElement ? window.scrollY : scroller.scrollTop;
+    if (scroller === document.scrollingElement) {
+      window.scrollBy({ top: amount, left: 0, behavior: "auto" });
+    } else {
+      scroller.scrollTop = Math.min(scroller.scrollTop + amount, scroller.scrollHeight);
+    }
+    const after = scroller === document.scrollingElement ? window.scrollY : scroller.scrollTop;
+    if (Math.abs(after - before) < 2 && scroller !== document.scrollingElement) {
+      window.scrollBy({ top: amount, left: 0, behavior: "auto" });
+    }
+    return { moved: Math.abs(after - before) > 2, before, after, scrollHeight: scroller.scrollHeight };
+  }
+
   function waitForFeedUpdate(timeoutMs) {
     return new Promise(resolve => {
       let done = false;
-      const finish = () => { if (done) return; done = true; observer.disconnect(); clearTimeout(timer); resolve(); };
       const observer = new MutationObserver(() => {
-        if ([...document.querySelectorAll("article a[href*='/status/']")].some(a => {
-          const match = a.href.match(/\/status\/(\d+)/);
-          return match && !seenTweets.has(match[1]);
+        if (getArticles().some(article => {
+          const id = getTweetId(article);
+          return id && !seenTweets.has(id);
         })) finish();
       });
+      const finish = () => {
+        if (done) return;
+        done = true;
+        observer.disconnect();
+        clearTimeout(timer);
+        resolve();
+      };
       observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
       const timer = setTimeout(finish, timeoutMs);
     });
   }
-  function sendStatus(status) { chrome.runtime.sendMessage({ type: "SCAN_STATUS", status, stats }).catch(() => {}); }
-  function normalizeImageUrl(src) {
-    if (!src) return null;
-    try {
-      const url = new URL(src);
-      if (url.hostname !== "pbs.twimg.com" || !url.pathname.includes("/media/")) return null;
-      const format = url.searchParams.get("format"); url.search = "";
-      if (format) url.searchParams.set("format", format);
-      url.searchParams.set("name", "orig"); return url.href;
-    } catch { return null; }
+
+  function sendStatus(status) {
+    chrome.runtime.sendMessage({ type: "SCAN_STATUS", status, stats }).catch(() => {});
   }
-  function mediaKey(url) {
-    try { const p = new URL(url), m = p.pathname.match(/\/media\/([^/.?]+)/); return m ? m[1] + ":" + (p.searchParams.get("format") || "") : null; }
-    catch { return null; }
-  }
-  function isNestedTweet(article) { return !!article.parentElement?.closest("article"); }
-  function getTweetId(article) {
-    for (const link of article.querySelectorAll("a[href*='/status/']")) {
-      const match = link.href.match(/\/status\/(\d+)/); if (match) return match[1];
-    }
-    return null;
-  }
-  function collectImages(article) {
-    const result = new Set();
-    for (const img of article.querySelectorAll("img")) {
-      const url = normalizeImageUrl(img.currentSrc || img.src); if (url) result.add(url);
-    }
-    return [...result];
-  }
+
   async function processTweet(article, batch) {
-    const id = getTweetId(article); if (!id || seenTweets.has(id)) return;
+    const id = getTweetId(article);
+    if (!id || seenTweets.has(id)) return;
     let target = article;
     if (!options.includeQuoted) {
       target = article.cloneNode(true);
@@ -57,60 +129,91 @@
     }
     const images = collectImages(target);
     if (!images.length) {
-      const attempts = (noMediaRetries.get(id) || 0) + 1; noMediaRetries.set(id, attempts);
-      if (attempts < 8) return;
-      seenTweets.add(id); stats.tweetsScanned++; return;
+      const attempts = (noMediaRetries.get(id) || 0) + 1;
+      noMediaRetries.set(id, attempts);
+      if (attempts < 20) return;
+      seenTweets.add(id);
+      stats.tweetsScanned++;
+      return;
     }
-    seenTweets.add(id); stats.tweetsScanned++;
+    seenTweets.add(id);
+    stats.tweetsScanned++;
     for (const url of images) {
       const key = mediaKey(url);
       if (!key || seenMedia.has(key)) { stats.skipped++; continue; }
-      seenMedia.add(key); batch.push({ tweetId: id, url }); stats.imagesFound++;
+      seenMedia.add(key);
+      batch.push({ tweetId: id, url });
+      stats.imagesFound++;
     }
   }
+
   async function scanVisibleTweets() {
-    const batch = [], articles = [...document.querySelectorAll("article")];
-    for (const article of articles) {
+    const batch = [];
+    for (const article of getArticles()) {
       if (stopRequested) break;
       if (!options.includeQuoted && isNestedTweet(article)) continue;
       await processTweet(article, batch);
     }
     if (batch.length) {
       const result = await chrome.runtime.sendMessage({ type: "X_SCAN_BATCH", items: batch });
-      if (!result?.ok) throw new Error(result?.error || "Could not persist discovered images");
+      if (!result?.ok) throw new Error(result?.error || "Could not add discovered images to the download queue");
+      sendStatus("Found " + stats.imagesFound + " images; " + (result.queued ?? result.total ?? 0) + " queued. Scanned " + stats.tweetsScanned + " posts.");
     }
-    await chrome.runtime.sendMessage({ type: "X_SCAN_PROGRESS", stats: { tweetsScanned: stats.tweetsScanned, imagesFound: stats.imagesFound } }).catch(() => {});
+    await chrome.runtime.sendMessage({
+      type: "X_SCAN_PROGRESS",
+      stats: { tweetsScanned: stats.tweetsScanned, imagesFound: stats.imagesFound }
+    }).catch(() => {});
   }
+
   async function finish(reason) {
     running = false;
-    await chrome.runtime.sendMessage({ type: "X_SCAN_FINISH", reason }).catch(() => {});
-    sendStatus(reason === "stopped" ? "Collection stopped. Starting downloads for collected images..." : "Collection complete. Starting downloads...");
+    const result = await chrome.runtime.sendMessage({ type: "X_SCAN_FINISH", reason }).catch(error => ({ ok: false, error: error.message }));
+    if (!result?.ok) sendStatus("Scan finished, but queue finalization failed: " + (result?.error || "unknown error"));
+    else sendStatus("Collection " + (reason === "stopped" ? "stopped" : "complete") +
+      ": " + result.tweets + " posts, " + result.images + " images. Downloads are in the queue.");
   }
+
   async function scanLoop() {
-    sendStatus("Collecting posts before downloading...");
+    sendStatus("Scanner started. Looking for posts and images...");
     let stagnantRounds = 0, lastUniqueCount = 0, lastScrollY = window.scrollY;
+    let scrollAttempts = 0;
     while (running && !stopRequested) {
       await scanVisibleTweets();
       if (stats.tweetsScanned >= options.maxTweets) break;
-      window.scrollBy({ top: Math.max(650, Math.floor(window.innerHeight * options.scrollStep)), behavior: "auto" });
+
+      const scroll = scrollFeed();
+      scrollAttempts++;
       await waitForFeedUpdate(options.waitForFeedMs);
       await sleep(options.settleDelay);
       await scanVisibleTweets();
-      const moved = Math.abs(window.scrollY - lastScrollY) > 20, count = seenTweets.size;
-      if (count === lastUniqueCount) stagnantRounds++; else stagnantRounds = 0;
-      if (count === lastUniqueCount && moved) stagnantRounds++;
-      lastUniqueCount = count; lastScrollY = window.scrollY;
-      if (stagnantRounds >= 10) break;
-      sendStatus("Collecting... posts: " + stats.tweetsScanned + "/" + options.maxTweets + ", images: " + stats.imagesFound);
+
+      const count = seenTweets.size;
+      const currentY = window.scrollY;
+      if (count === lastUniqueCount) stagnantRounds++;
+      else stagnantRounds = 0;
+      if (count === lastUniqueCount && (scroll.moved || Math.abs(currentY - lastScrollY) > 20)) stagnantRounds++;
+      lastUniqueCount = count;
+      lastScrollY = currentY;
+
+      sendStatus("Scrolling feed... posts: " + stats.tweetsScanned + "/" + options.maxTweets +
+        ", images: " + stats.imagesFound + ", scroll attempts: " + scrollAttempts);
+      if (stagnantRounds >= 12) break;
     }
     await scanVisibleTweets();
     await finish(stopRequested ? "stopped" : "completed");
     stopRequested = false;
   }
+
   chrome.runtime.onMessage.addListener(message => {
     if (message.type === "START_SCAN") {
       if (running) return;
-      options = { includeQuoted: message.options?.includeQuoted === true, maxTweets: Math.max(1, Math.min(10000, Number(message.options?.maxTweets) || 500)), scrollDelay: Math.max(100, Math.min(5000, Number(message.options?.scrollDelay) || 250)), scrollStep: Math.max(0.7, Math.min(1.5, Number(message.options?.scrollStep) || 1.05)), waitForFeedMs: Math.max(100, Math.min(1500, Number(message.options?.waitForFeedMs) || Number(message.options?.scrollDelay) || 400)), settleDelay: Math.max(50, Math.min(1000, Number(message.options?.settleDelay) || 175)) };
+      options = {
+        includeQuoted: message.options?.includeQuoted === true,
+        maxTweets: Math.max(1, Math.min(10000, Number(message.options?.maxTweets) || 500)),
+        scrollStep: Math.max(0.7, Math.min(1.5, Number(message.options?.scrollStep) || 1.05)),
+        waitForFeedMs: Math.max(150, Math.min(2500, Number(message.options?.waitForFeedMs) || 500)),
+        settleDelay: Math.max(50, Math.min(1200, Number(message.options?.settleDelay) || 200))
+      };
       stats = { tweetsScanned: 0, imagesFound: 0, skipped: 0 };
       seenTweets.clear(); seenMedia.clear(); noMediaRetries.clear();
       running = true; stopRequested = false;
@@ -120,6 +223,9 @@
         sendStatus("Scan error: " + error.message);
       });
     }
-    if (message.type === "STOP_SCAN") { stopRequested = true; sendStatus("Stopping collection..."); }
+    if (message.type === "STOP_SCAN") {
+      stopRequested = true;
+      sendStatus("Stopping collection...");
+    }
   });
 })();
