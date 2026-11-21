@@ -9,7 +9,9 @@ chrome.runtime.onMessage.addListener((m,s,reply)=>{
  case "X_SCAN_INIT": await initializeXScan(m.options||{});return {ok:true};
  case "X_SCAN_BATCH": return await addXScanBatch(m.items||[]);
  case "X_SCAN_PROGRESS": await updateXScanProgress(m.stats||{});return {ok:true};
- case "X_SCAN_FINISH": return await finishXScan(m.reason||"completed");
+ case "X_SCAN_FINISH": {const result=await finishXScan(m.reason||"completed");if(s.tab?.id!=null)await detachXBackground(s.tab.id);return result;}
+ case "X_SCAN_BACKGROUND_ATTACH": return await attachXBackground(m.tabId);
+ case "X_SCAN_BACKGROUND_DETACH": return await detachXBackground(m.tabId);
  case "START_BOORU_SEARCH": await startBooruSearch(m.options);return {ok:true};
  case "STOP_BOORU_SEARCH": await stopBooruSearch();return {ok:true};
  case "QUEUE_GET": return {queue:await getQueue(),paused:(await chrome.storage.local.get(PAUSED_KEY))[PAUSED_KEY]===true};
@@ -24,6 +26,31 @@ chrome.runtime.onMessage.addListener((m,s,reply)=>{
  run().then(reply).catch(e=>reply({ok:false,error:e.message}));return true;
 });
 chrome.downloads.onChanged.addListener(d=>{if(d.state)settleDownload(d.id,d.state.current,d.error?.current).catch(console.error);});
+const X_DEBUGGER_TABS_KEY="xdl_debugger_tab_ids";
+async function attachXBackground(tabId){
+ if(!Number.isInteger(tabId))return {ok:false,error:"Invalid X tab ID"};
+ try{
+  const targets=await chrome.debugger.getTargets();
+  const attached=targets.some(t=>t.tabId===tabId&&t.attached);
+  if(!attached)await chrome.debugger.attach({tabId},"1.3");
+  await chrome.debugger.sendCommand({tabId},"Page.setWebLifecycleState",{state:"active"}).catch(()=>{});
+  await chrome.debugger.sendCommand({tabId},"Emulation.setFocusEmulationEnabled",{enabled:true}).catch(()=>{});
+  const data=await chrome.storage.local.get(X_DEBUGGER_TABS_KEY),ids=new Set(data[X_DEBUGGER_TABS_KEY]||[]);ids.add(tabId);
+  await chrome.storage.local.set({[X_DEBUGGER_TABS_KEY]:[...ids]});
+  return {ok:true,experimental:true};
+ }catch(e){return {ok:false,error:e.message};}
+}
+async function detachXBackground(tabId){
+ if(!Number.isInteger(tabId))return {ok:true};
+ try{await chrome.debugger.sendCommand({tabId},"Emulation.setFocusEmulationEnabled",{enabled:false}).catch(()=>{});await chrome.debugger.detach({tabId}).catch(()=>{});}catch{}
+ const data=await chrome.storage.local.get(X_DEBUGGER_TABS_KEY),ids=(data[X_DEBUGGER_TABS_KEY]||[]).filter(id=>id!==tabId);
+ await chrome.storage.local.set({[X_DEBUGGER_TABS_KEY]:ids});
+ return {ok:true};
+}
+chrome.tabs.onRemoved.addListener(tabId=>{detachXBackground(tabId).catch(()=>{});});
+chrome.debugger.onDetach.addListener(source=>{
+ if(source.tabId!=null)detachXBackground(source.tabId).catch(()=>{});
+});
 const X_SCAN_KEY="xdl_x_scan_manifest";
 async function initializeXScan(options){
  const manifest={id:Date.now().toString(),status:"discovering",targetPosts:Math.max(1,Math.min(10000,Number(options.maxTweets)||500)),includeQuoted:options.includeQuoted===true,startedAt:Date.now(),updatedAt:Date.now(),tweets:[],items:{},progress:{tweetsScanned:0,imagesFound:0}};

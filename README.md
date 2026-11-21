@@ -3,7 +3,7 @@
 Manifest V3 Chromium extension for downloading original-size media from X/Twitter and tag-based Booru galleries.
 
 ## Sources
-- X / Twitter profile feed. The source tab must remain open while discovering new posts.
+- X / Twitter profile feed. The source tab must remain open while discovering new posts. An experimental debugger-backed mode can reduce throttling when the browser is minimized.
 - Danbooru
 - Gelbooru
 - Rule34
@@ -64,3 +64,19 @@ The scanner uses small automatic scroll steps and tracks unique tweet IDs rather
 - Live integration tests against current gallery APIs and Chrome/Opera have not yet been performed. Verify each gallery, long-running queue recovery, original-file URL reconstruction, and X lazy loading before publishing.
 
 The extension does not bypass private-account controls, authentication barriers, or site restrictions.
+
+
+## Fast scanning while the browser is minimized
+
+The X scanner now uses mutation-driven waits instead of two fixed sleeps per scroll. Its default fast profile scrolls about one viewport at a time, waits for X to insert new cards (up to 400 ms), then captures media. The popup exposes a lower scroll-delay setting (default 250 ms).
+
+An optional **Try to keep scanning active when the browser is minimized** mode requests the `debugger` permission at scan start. When granted, the extension attaches to the X tab and asks Chromium DevTools Protocol to keep the page lifecycle active and emulate focus; it detaches when scanning finishes. This is experimental and may show Chrome's debugging notification. It can reduce lifecycle throttling, but Chromium may still throttle rendering/timers for occluded or minimized windows. No extension can guarantee full-speed DOM rendering in every browser configuration.
+
+For maximum predictable speed on Chromium, launch the browser with these flags (use a separate profile if you do not want to affect your normal browser session):
+
+```text
+--disable-backgrounding-occluded-windows
+--disable-renderer-backgrounding
+```
+
+Do not use these flags as a security boundary or for a shared browser profile. X's own network loading, rate limits, and DOM virtualization still determine how quickly older posts become available.

@@ -25,9 +25,11 @@
         <input id="maxTweets" type="number" min="1" max="10000" value="500">
       </div>
       <div class="row">
-        <label for="scrollDelay">Scroll delay, ms</label>
-        <input id="scrollDelay" type="number" min="350" max="10000" value="700">
+        <label for="scrollDelay">Scroll delay, ms (fast mode)</label>
+        <input id="scrollDelay" type="number" min="100" max="5000" value="250">
       </div>
+      <label class="check"><input id="backgroundMode" type="checkbox" checked> Try to keep scanning active when browser is minimized</label>
+      <p class="hint">Experimental: requests temporary debugging access. Chromium may still throttle a minimized window. For more reliable speed, see README launch flags.</p>
     </section>
 
     <section id="booruOptions" hidden>

@@ -5,6 +5,20 @@
   let stats = { tweetsScanned: 0, imagesFound: 0, skipped: 0 };
   const seenTweets = new Set(), seenMedia = new Set(), noMediaRetries = new Map();
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  function waitForFeedUpdate(timeoutMs) {
+    return new Promise(resolve => {
+      let done = false;
+      const finish = () => { if (done) return; done = true; observer.disconnect(); clearTimeout(timer); resolve(); };
+      const observer = new MutationObserver(() => {
+        if ([...document.querySelectorAll("article a[href*='/status/']")].some(a => {
+          const match = a.href.match(/\/status\/(\d+)/);
+          return match && !seenTweets.has(match[1]);
+        })) finish();
+      });
+      observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
+      const timer = setTimeout(finish, timeoutMs);
+    });
+  }
   function sendStatus(status) { chrome.runtime.sendMessage({ type: "SCAN_STATUS", status, stats }).catch(() => {}); }
   function normalizeImageUrl(src) {
     if (!src) return null;
@@ -78,9 +92,9 @@
     while (running && !stopRequested) {
       await scanVisibleTweets();
       if (stats.tweetsScanned >= options.maxTweets) break;
-      window.scrollBy({ top: Math.max(450, Math.floor(window.innerHeight * 0.65)), behavior: "auto" });
-      await sleep(options.scrollDelay);
-      await sleep(Math.min(700, Math.max(250, options.scrollDelay / 3)));
+      window.scrollBy({ top: Math.max(650, Math.floor(window.innerHeight * options.scrollStep)), behavior: "auto" });
+      await waitForFeedUpdate(options.waitForFeedMs);
+      await sleep(options.settleDelay);
       await scanVisibleTweets();
       const moved = Math.abs(window.scrollY - lastScrollY) > 20, count = seenTweets.size;
       if (count === lastUniqueCount) stagnantRounds++; else stagnantRounds = 0;
@@ -96,7 +110,7 @@
   chrome.runtime.onMessage.addListener(message => {
     if (message.type === "START_SCAN") {
       if (running) return;
-      options = { includeQuoted: message.options?.includeQuoted === true, maxTweets: Math.max(1, Math.min(10000, Number(message.options?.maxTweets) || 500)), scrollDelay: Math.max(350, Math.min(10000, Number(message.options?.scrollDelay) || 700)) };
+      options = { includeQuoted: message.options?.includeQuoted === true, maxTweets: Math.max(1, Math.min(10000, Number(message.options?.maxTweets) || 500)), scrollDelay: Math.max(100, Math.min(5000, Number(message.options?.scrollDelay) || 250)), scrollStep: Math.max(0.7, Math.min(1.5, Number(message.options?.scrollStep) || 1.05)), waitForFeedMs: Math.max(100, Math.min(1500, Number(message.options?.waitForFeedMs) || Number(message.options?.scrollDelay) || 400)), settleDelay: Math.max(50, Math.min(500, Number(message.options?.settleDelay) || 100)) };
       stats = { tweetsScanned: 0, imagesFound: 0, skipped: 0 };
       seenTweets.clear(); seenMedia.clear(); noMediaRetries.clear();
       running = true; stopRequested = false;
