@@ -64,7 +64,13 @@
   }
 
   function shouldProcessFromStart(article, id) {
-    if (startReached) return true;
+    if (startReached) {
+      if (options.startMode === "date") {
+        const postDate = getTweetDateKey(article);
+        return !!postDate && postDate <= options.startDate;
+      }
+      return true;
+    }
     if (!id || encounteredTweets.has(id)) return false;
 
     if (options.startMode === "number") {
