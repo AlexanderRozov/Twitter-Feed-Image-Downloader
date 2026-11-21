@@ -11,7 +11,7 @@
       const finish = () => { if (done) return; done = true; observer.disconnect(); clearTimeout(timer); resolve(); };
       const observer = new MutationObserver(() => {
         if ([...document.querySelectorAll("article a[href*='/status/']")].some(a => {
-          const match = a.href.match(/\\/status\\/(\\d+)/);
+          const match = a.href.match(/\/status\/(\d+)/);
           return match && !seenTweets.has(match[1]);
         })) finish();
       });
@@ -110,7 +110,7 @@
   chrome.runtime.onMessage.addListener(message => {
     if (message.type === "START_SCAN") {
       if (running) return;
-      options = { includeQuoted: message.options?.includeQuoted === true, maxTweets: Math.max(1, Math.min(10000, Number(message.options?.maxTweets) || 500)), scrollDelay: Math.max(100, Math.min(5000, Number(message.options?.scrollDelay) || 250)), scrollStep: Math.max(0.7, Math.min(1.5, Number(message.options?.scrollStep) || 1.05)), waitForFeedMs: Math.max(100, Math.min(1500, Number(message.options?.waitForFeedMs) || 400)), settleDelay: Math.max(50, Math.min(500, Number(message.options?.settleDelay) || 100)) };
+      options = { includeQuoted: message.options?.includeQuoted === true, maxTweets: Math.max(1, Math.min(10000, Number(message.options?.maxTweets) || 500)), scrollDelay: Math.max(100, Math.min(5000, Number(message.options?.scrollDelay) || 250)), scrollStep: Math.max(0.7, Math.min(1.5, Number(message.options?.scrollStep) || 1.05)), waitForFeedMs: Math.max(100, Math.min(1500, Number(message.options?.waitForFeedMs) || Number(message.options?.scrollDelay) || 400)), settleDelay: Math.max(50, Math.min(500, Number(message.options?.settleDelay) || 100)) };
       stats = { tweetsScanned: 0, imagesFound: 0, skipped: 0 };
       seenTweets.clear(); seenMedia.clear(); noMediaRetries.clear();
       running = true; stopRequested = false;
