@@ -96,7 +96,7 @@
   chrome.runtime.onMessage.addListener(message => {
     if (message.type === "START_SCAN") {
       if (running) return;
-      options = { includeQuoted: message.options?.includeQuoted === true, maxTweets: Math.max(1, Math.min(10000, Number(message.options?.maxTweets) || 500)), scrollDelay: Math.max(500, Math.min(10000, Number(message.options?.scrollDelay) || 900)) };
+      options = { includeQuoted: message.options?.includeQuoted === true, maxTweets: Math.max(1, Math.min(10000, Number(message.options?.maxTweets) || 500)), scrollDelay: Math.max(350, Math.min(10000, Number(message.options?.scrollDelay) || 700)) };
       stats = { tweetsScanned: 0, imagesFound: 0, skipped: 0 };
       seenTweets.clear(); seenMedia.clear(); noMediaRetries.clear();
       running = true; stopRequested = false;
