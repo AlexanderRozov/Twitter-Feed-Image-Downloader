@@ -81,17 +81,20 @@
     const scroller = findFeedScroller();
     const amount = Math.max(650, Math.floor((scroller === document.scrollingElement
       ? window.innerHeight : scroller.clientHeight) * options.scrollStep));
+    const windowBefore = window.scrollY;
     const before = scroller === document.scrollingElement ? window.scrollY : scroller.scrollTop;
     if (scroller === document.scrollingElement) {
       window.scrollBy({ top: amount, left: 0, behavior: "auto" });
     } else {
       scroller.scrollTop = Math.min(scroller.scrollTop + amount, scroller.scrollHeight);
     }
-    const after = scroller === document.scrollingElement ? window.scrollY : scroller.scrollTop;
+    let after = scroller === document.scrollingElement ? window.scrollY : scroller.scrollTop;
     if (Math.abs(after - before) < 2 && scroller !== document.scrollingElement) {
       window.scrollBy({ top: amount, left: 0, behavior: "auto" });
+      after = scroller.scrollTop;
     }
-    return { moved: Math.abs(after - before) > 2, before, after, scrollHeight: scroller.scrollHeight };
+    const windowMoved = Math.abs(window.scrollY - windowBefore) > 2;
+    return { moved: Math.abs(after - before) > 2 || windowMoved, before, after, scrollHeight: scroller.scrollHeight };
   }
 
   function waitForFeedUpdate(timeoutMs) {
