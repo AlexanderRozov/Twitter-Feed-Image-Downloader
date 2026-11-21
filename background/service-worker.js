@@ -6,6 +6,10 @@ chrome.alarms.onAlarm.addListener(a=>{if(a.name==="xdl_queue_pump")pumpQueue();}
 chrome.runtime.onMessage.addListener((m,s,reply)=>{
  const run=async()=>{switch(m.type){
  case "DOWNLOAD_IMAGE": await enqueue([{url:m.url,source:"x",postId:m.tweetId,tags:[]}]);return {ok:true};
+ case "X_SCAN_INIT": await initializeXScan(m.options||{});return {ok:true};
+ case "X_SCAN_BATCH": return await addXScanBatch(m.items||[]);
+ case "X_SCAN_PROGRESS": await updateXScanProgress(m.stats||{});return {ok:true};
+ case "X_SCAN_FINISH": return await finishXScan(m.reason||"completed");
  case "START_BOORU_SEARCH": await startBooruSearch(m.options);return {ok:true};
  case "STOP_BOORU_SEARCH": await stopBooruSearch();return {ok:true};
  case "QUEUE_GET": return {queue:await getQueue(),paused:(await chrome.storage.local.get(PAUSED_KEY))[PAUSED_KEY]===true};
@@ -20,6 +24,46 @@ chrome.runtime.onMessage.addListener((m,s,reply)=>{
  run().then(reply).catch(e=>reply({ok:false,error:e.message}));return true;
 });
 chrome.downloads.onChanged.addListener(d=>{if(d.state)settleDownload(d.id,d.state.current,d.error?.current).catch(console.error);});
+const X_SCAN_KEY="xdl_x_scan_manifest";
+async function initializeXScan(options){
+ const manifest={id:Date.now().toString(),status:"discovering",targetPosts:Math.max(1,Math.min(10000,Number(options.maxTweets)||500)),includeQuoted:options.includeQuoted===true,startedAt:Date.now(),updatedAt:Date.now(),tweets:[],items:{},progress:{tweetsScanned:0,imagesFound:0}};
+ await chrome.storage.local.set({[X_SCAN_KEY]:manifest,xdl_stats:{found:0,downloaded:0,failed:0,queued:0}});
+ await setStatus("Collecting posts and image URLs...");
+}
+async function addXScanBatch(items){
+ const data=await chrome.storage.local.get(X_SCAN_KEY),m=data[X_SCAN_KEY];
+ if(!m||m.status!=="discovering")return {ok:false,error:"No active X discovery session"};
+ const tweets=new Set(m.tweets||[]),known=m.items||{};let added=0;
+ for(const item of items){
+  if(!item||!item.url||!item.tweetId)continue;
+  const key=xMediaKey(item.url);if(!key||known[key])continue;
+  known[key]={url:normalizeXMediaUrl(item.url),source:"x",postId:String(item.tweetId),tweetId:String(item.tweetId),mediaKey:key,tags:[]};tweets.add(String(item.tweetId));added++;
+ }
+ m.tweets=[...tweets];m.items=known;m.updatedAt=Date.now();
+ await chrome.storage.local.set({[X_SCAN_KEY]:m});
+ return {ok:true,added,total:Object.keys(known).length,tweets:tweets.size};
+}
+function normalizeXMediaUrl(raw){
+ try{const u=new URL(raw);const format=u.searchParams.get("format");u.search="";if(format)u.searchParams.set("format",format);u.searchParams.set("name","orig");return u.href;}catch{return raw;}
+}
+function xMediaKey(raw){
+ try{const u=new URL(raw),match=u.pathname.match(/\/media\/([^/.?]+)/);if(!match)return null;return match[1]+":"+(u.searchParams.get("format")||"");}catch{return null;}
+}
+async function updateXScanProgress(progress){
+ const data=await chrome.storage.local.get(X_SCAN_KEY),m=data[X_SCAN_KEY];if(!m||m.status!=="discovering")return;
+ m.progress={...m.progress,...progress};m.updatedAt=Date.now();await chrome.storage.local.set({[X_SCAN_KEY]:m});
+ const count=Object.keys(m.items||{}).length;
+ await setStatus("Collecting: "+(m.progress.tweetsScanned||0)+" posts, "+count+" unique images...");
+}
+async function finishXScan(reason){
+ const data=await chrome.storage.local.get(X_SCAN_KEY),m=data[X_SCAN_KEY];
+ if(!m||m.status!=="discovering")return {ok:false,error:"No active X discovery session"};
+ const items=Object.values(m.items||{});m.status=reason==="stopped"?"stopped":"discovered";m.finishedAt=Date.now();m.updatedAt=Date.now();
+ await chrome.storage.local.set({[X_SCAN_KEY]:m,xdl_stats:{found:items.length,downloaded:0,failed:0,queued:items.length}});
+ if(items.length){await enqueue(items);await setStatus("Discovery "+(reason==="stopped"?"stopped":"complete")+": "+(m.tweets||[]).length+" posts, "+items.length+" unique images. Downloads started.");}
+ else await setStatus("Discovery finished: no downloadable images were found.");
+ return {ok:true,tweets:(m.tweets||[]).length,images:items.length,status:m.status};
+}
 async function getQueue(){const x=await chrome.storage.local.get(QUEUE_KEY);return Array.isArray(x[QUEUE_KEY])?x[QUEUE_KEY]:[];}
 async function setQueue(q){await chrome.storage.local.set({[QUEUE_KEY]:q});await updateStats();}
 async function getSeen(){const x=await chrome.storage.local.get(SEEN_KEY);return new Set(Array.isArray(x[SEEN_KEY])?x[SEEN_KEY]:[]);}
