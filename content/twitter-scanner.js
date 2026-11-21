@@ -189,9 +189,11 @@
 
       const count = seenTweets.size;
       const currentY = window.scrollY;
-      if (count === lastUniqueCount) stagnantRounds++;
-      else stagnantRounds = 0;
-      if (count === lastUniqueCount && (scroll.moved || Math.abs(currentY - lastScrollY) > 20)) stagnantRounds++;
+      const madeProgress = count !== lastUniqueCount;
+      const moved = scroll.moved || Math.abs(currentY - lastScrollY) > 20;
+      if (madeProgress) stagnantRounds = 0;
+      else if (!moved) stagnantRounds++;
+      else stagnantRounds = 0; // Keep scanning while the feed is still moving/loading.
       lastUniqueCount = count;
       lastScrollY = currentY;
 
