@@ -1,4 +1,4 @@
-const QUEUE_KEY="xdl_download_queue",STATE_KEY="xdl_booru_job",PAUSED_KEY="xdl_queue_paused",MAX_PARALLEL=3;
+const QUEUE_KEY="xdl_download_queue",STATE_KEY="xdl_booru_job",PAUSED_KEY="xdl_queue_paused",QUEUE_GENERATION_KEY="xdl_queue_generation",MAX_PARALLEL=3;
 let pumpRunning=false,pumpRequested=false;
 chrome.runtime.onInstalled.addListener(()=>{chrome.alarms.create("xdl_queue_pump",{periodInMinutes:1});recoverQueue().catch(console.error);});
 chrome.runtime.onStartup.addListener(()=>recoverQueue().catch(console.error));
@@ -21,6 +21,7 @@ chrome.runtime.onMessage.addListener((m,s,reply)=>{
  case "QUEUE_RETRY_ONE": {const q=await getQueue(),x=q.find(y=>y.url===m.url);if(x&&x.state!=="downloading"){x.state="pending";x.attempts=0;x.error=null;x.nextAttemptAt=0;await setQueue(q);pumpQueue();}return {ok:true};}
  case "QUEUE_REMOVE": {const q=await getQueue(),x=q.find(y=>y.url===m.url);if(x&&x.state!=="downloading"){await setQueue(q.filter(y=>y.url!==m.url));}return {ok:true};}
  case "QUEUE_CLEAR_COMPLETED": await setQueue((await getQueue()).filter(x=>x.state!=="complete"));return {ok:true};
+ case "QUEUE_CLEAR_ALL": return await clearEntireQueue();
  default:return {ok:false,error:"Unknown command"};
  }};
  run().then(reply).catch(e=>reply({ok:false,error:e.message}));return true;
@@ -65,13 +66,15 @@ chrome.debugger.onDetach.addListener(source=>{
 });
 const X_SCAN_KEY="xdl_x_scan_manifest";
 async function initializeXScan(options){
- const manifest={id:Date.now().toString(),status:"discovering",targetPosts:Math.max(1,Math.min(10000,Number(options.maxTweets)||500)),includeQuoted:options.includeQuoted===true,startedAt:Date.now(),updatedAt:Date.now(),tweets:[],items:{},progress:{tweetsScanned:0,imagesFound:0}};
+ const generation=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;
+ const manifest={id:Date.now().toString(),status:"discovering",queueGeneration:generation,targetPosts:Math.max(1,Math.min(10000,Number(options.maxTweets)||500)),includeQuoted:options.includeQuoted===true,startedAt:Date.now(),updatedAt:Date.now(),tweets:[],items:{},progress:{tweetsScanned:0,imagesFound:0}};
  await chrome.storage.local.set({[X_SCAN_KEY]:manifest,xdl_stats:{found:0,downloaded:0,failed:0,queued:0}});
  await setStatus("Collecting posts and image URLs...");
 }
 async function addXScanBatch(items){
+ const generation=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;
  const data=await chrome.storage.local.get(X_SCAN_KEY),m=data[X_SCAN_KEY];
- if(!m||m.status!=="discovering")return {ok:false,error:"No active X discovery session"};
+ if(!m||m.status!=="discovering"||m.queueGeneration!==generation)return {ok:false,error:"No active X discovery session (queue was cleared or scan stopped)"};
  const tweets=new Set(m.tweets||[]),known=m.items||{},discovered=[];let added=0;
  for(const item of items){
   if(!item||!item.url||!item.tweetId)continue;
@@ -83,7 +86,9 @@ async function addXScanBatch(items){
  m.tweets=[...tweets];m.items=known;m.updatedAt=Date.now();
  await chrome.storage.local.set({[X_SCAN_KEY]:m});
  // Enqueue each discovered batch immediately; don't wait for the full feed scan to finish.
- const queued=discovered.length?await enqueue(discovered):{added:0,retried:0,total:(await getQueue()).length};
+ const currentGeneration=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;
+ if(currentGeneration!==generation)return {ok:false,error:"Queue was cleared while scanning"};
+ const queued=discovered.length?await enqueue(discovered,{generation}):{added:0,retried:0,total:(await getQueue()).length};
  const statsData=await chrome.storage.local.get("xdl_stats"),previous=statsData.xdl_stats||{};
  await chrome.storage.local.set({xdl_stats:{...previous,found:Object.keys(known).length}});
  await updateStats();
@@ -102,17 +107,37 @@ async function updateXScanProgress(progress){
  await setStatus("Collecting: "+(m.progress.tweetsScanned||0)+" posts, "+count+" unique images...");
 }
 async function finishXScan(reason){
+ const generation=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;
  const data=await chrome.storage.local.get(X_SCAN_KEY),m=data[X_SCAN_KEY];
- if(!m||m.status!=="discovering")return {ok:false,error:"No active X discovery session"};
+ if(!m||m.status!=="discovering"||m.queueGeneration!==generation)return {ok:false,error:"No active X discovery session"};
  const items=Object.values(m.items||{});m.status=reason==="stopped"?"stopped":"discovered";m.finishedAt=Date.now();m.updatedAt=Date.now();
  await chrome.storage.local.set({[X_SCAN_KEY]:m,xdl_stats:{found:items.length,downloaded:0,failed:0,queued:items.length}});
- if(items.length){await enqueue(items);await setStatus("Discovery "+(reason==="stopped"?"stopped":"complete")+": "+(m.tweets||[]).length+" posts, "+items.length+" unique images. Downloads started.");}
+ if(items.length&&generation===(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]){await enqueue(items,{generation});await setStatus("Discovery "+(reason==="stopped"?"stopped":"complete")+": "+(m.tweets||[]).length+" posts, "+items.length+" unique images. Downloads started.");}
  else await setStatus("Discovery finished: no downloadable images were found.");
  return {ok:true,tweets:(m.tweets||[]).length,images:items.length,status:m.status};
 }
+async function clearEntireQueue(){
+ const current=await chrome.storage.local.get([QUEUE_GENERATION_KEY,X_SCAN_KEY,STATE_KEY]);
+ const generation=(current[QUEUE_GENERATION_KEY]||0)+1;
+ await chrome.storage.local.set({[QUEUE_GENERATION_KEY]:generation,[PAUSED_KEY]:true});
+ if(current[X_SCAN_KEY]?.status==="discovering")await chrome.storage.local.set({[X_SCAN_KEY]:{...current[X_SCAN_KEY],status:"cancelled",finishedAt:Date.now(),updatedAt:Date.now()}});
+ if(current[STATE_KEY])await chrome.storage.local.set({[STATE_KEY]:{...current[STATE_KEY],cancelled:true}});
+ const existing=await getQueue();
+ const ids=existing.filter(x=>x.state==="downloading"&&Number.isInteger(x.downloadId)).map(x=>x.downloadId);
+ await chrome.storage.local.set({[QUEUE_KEY]:[],xdl_stats:{found:0,downloaded:0,failed:0,queued:0},xdl_status:"Queue cleared"});
+ const cancelled=[];
+ for(const id of ids){try{await chrome.downloads.cancel(id);cancelled.push(id);}catch{}}
+ // Clear only after cancel calls have been issued; download events for removed IDs are ignored.
+ await chrome.storage.local.set({[QUEUE_KEY]:[],[PAUSED_KEY]:false,xdl_stats:{found:0,downloaded:0,failed:0,queued:0},xdl_status:"Queue cleared. "+cancelled.length+" active downloads cancelled."});
+ chrome.alarms.clear("xdl_queue_pump");
+ return {ok:true,removed:existing.length,cancelled:cancelled.length};
+}
 async function getQueue(){const x=await chrome.storage.local.get(QUEUE_KEY);return Array.isArray(x[QUEUE_KEY])?x[QUEUE_KEY]:[];}
 async function setQueue(q){await chrome.storage.local.set({[QUEUE_KEY]:q});await updateStats();}
-async function enqueue(items){
+async function enqueue(items,options={}){
+ const generation=options.generation??((await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0);
+ const currentGeneration=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;
+ if(generation!==currentGeneration)return {ok:false,added:0,retried:0,total:(await getQueue()).length};
  const q=await getQueue(),byKey=new Map(q.map(item=>[item.key||dedupeKey(item.url),item]));
  let added=0,retried=0;
  for(const item of items){
@@ -128,6 +153,8 @@ async function enqueue(items){
   const queued={...item,key,state:"pending",attempts:0,error:null,nextAttemptAt:0,addedAt:Date.now()};
   q.push(queued);byKey.set(key,queued);added++;
  }
+ const latestGeneration=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;
+ if(latestGeneration!==generation)return {ok:false,added:0,retried:0,total:(await getQueue()).length};
  await setQueue(q);
  if(added||retried)pumpQueue();
  return {ok:true,added,retried,total:q.length};
