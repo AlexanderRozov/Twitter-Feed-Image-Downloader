@@ -1,4 +1,4 @@
-const QUEUE_KEY="xdl_download_queue",STATE_KEY="xdl_booru_job",PAUSED_KEY="xdl_queue_paused",MAX_PARALLEL=3;
+const QUEUE_KEY="xdl_download_queue",STATE_KEY="xdl_booru_job",PAUSED_KEY="xdl_queue_paused",QUEUE_GENERATION_KEY="xdl_queue_generation",MAX_PARALLEL=3;
 let pumpRunning=false,pumpRequested=false;
 chrome.runtime.onInstalled.addListener(()=>{chrome.alarms.create("xdl_queue_pump",{periodInMinutes:1});recoverQueue().catch(console.error);});
 chrome.runtime.onStartup.addListener(()=>recoverQueue().catch(console.error));
@@ -21,6 +21,7 @@ chrome.runtime.onMessage.addListener((m,s,reply)=>{
  case "QUEUE_RETRY_ONE": {const q=await getQueue(),x=q.find(y=>y.url===m.url);if(x&&x.state!=="downloading"){x.state="pending";x.attempts=0;x.error=null;x.nextAttemptAt=0;await setQueue(q);pumpQueue();}return {ok:true};}
  case "QUEUE_REMOVE": {const q=await getQueue(),x=q.find(y=>y.url===m.url);if(x&&x.state!=="downloading"){await setQueue(q.filter(y=>y.url!==m.url));}return {ok:true};}
  case "QUEUE_CLEAR_COMPLETED": await setQueue((await getQueue()).filter(x=>x.state!=="complete"));return {ok:true};
+ case "QUEUE_CLEAR_ALL": return await clearEntireQueue();
  default:return {ok:false,error:"Unknown command"};
  }};
  run().then(reply).catch(e=>reply({ok:false,error:e.message}));return true;
@@ -65,13 +66,15 @@ chrome.debugger.onDetach.addListener(source=>{
 });
 const X_SCAN_KEY="xdl_x_scan_manifest";
 async function initializeXScan(options){
- const manifest={id:Date.now().toString(),status:"discovering",targetPosts:Math.max(1,Math.min(10000,Number(options.maxTweets)||500)),includeQuoted:options.includeQuoted===true,startedAt:Date.now(),updatedAt:Date.now(),tweets:[],items:{},progress:{tweetsScanned:0,imagesFound:0}};
+ const generation=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;
+ const manifest={id:Date.now().toString(),status:"discovering",queueGeneration:generation,targetPosts:Math.max(1,Math.min(10000,Number(options.maxTweets)||500)),includeQuoted:options.includeQuoted===true,startedAt:Date.now(),updatedAt:Date.now(),tweets:[],items:{},progress:{tweetsScanned:0,imagesFound:0}};
  await chrome.storage.local.set({[X_SCAN_KEY]:manifest,xdl_stats:{found:0,downloaded:0,failed:0,queued:0}});
  await setStatus("Collecting posts and image URLs...");
 }
 async function addXScanBatch(items){
+ const generation=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;
  const data=await chrome.storage.local.get(X_SCAN_KEY),m=data[X_SCAN_KEY];
- if(!m||m.status!=="discovering")return {ok:false,error:"No active X discovery session"};
+ if(!m||m.status!=="discovering"||m.queueGeneration!==generation)return {ok:false,error:"No active X discovery session (queue was cleared or scan stopped)"};
  const tweets=new Set(m.tweets||[]),known=m.items||{},discovered=[];let added=0;
  for(const item of items){
   if(!item||!item.url||!item.tweetId)continue;
@@ -83,7 +86,9 @@ async function addXScanBatch(items){
  m.tweets=[...tweets];m.items=known;m.updatedAt=Date.now();
  await chrome.storage.local.set({[X_SCAN_KEY]:m});
  // Enqueue each discovered batch immediately; don't wait for the full feed scan to finish.
- const queued=discovered.length?await enqueue(discovered):{added:0,retried:0,total:(await getQueue()).length};
+ const currentGeneration=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;
+ if(currentGeneration!==generation)return {ok:false,error:"Queue was cleared while scanning"};
+ const queued=discovered.length?await enqueue(discovered,{generation}):{added:0,retried:0,total:(await getQueue()).length};
  const statsData=await chrome.storage.local.get("xdl_stats"),previous=statsData.xdl_stats||{};
  await chrome.storage.local.set({xdl_stats:{...previous,found:Object.keys(known).length}});
  await updateStats();
@@ -102,17 +107,37 @@ async function updateXScanProgress(progress){
  await setStatus("Collecting: "+(m.progress.tweetsScanned||0)+" posts, "+count+" unique images...");
 }
 async function finishXScan(reason){
+ const generation=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;
  const data=await chrome.storage.local.get(X_SCAN_KEY),m=data[X_SCAN_KEY];
- if(!m||m.status!=="discovering")return {ok:false,error:"No active X discovery session"};
+ if(!m||m.status!=="discovering"||m.queueGeneration!==generation)return {ok:false,error:"No active X discovery session"};
  const items=Object.values(m.items||{});m.status=reason==="stopped"?"stopped":"discovered";m.finishedAt=Date.now();m.updatedAt=Date.now();
  await chrome.storage.local.set({[X_SCAN_KEY]:m,xdl_stats:{found:items.length,downloaded:0,failed:0,queued:items.length}});
- if(items.length){await enqueue(items);await setStatus("Discovery "+(reason==="stopped"?"stopped":"complete")+": "+(m.tweets||[]).length+" posts, "+items.length+" unique images. Downloads started.");}
+ if(items.length&&generation===(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]){await enqueue(items,{generation});await setStatus("Discovery "+(reason==="stopped"?"stopped":"complete")+": "+(m.tweets||[]).length+" posts, "+items.length+" unique images. Downloads started.");}
  else await setStatus("Discovery finished: no downloadable images were found.");
  return {ok:true,tweets:(m.tweets||[]).length,images:items.length,status:m.status};
 }
+async function clearEntireQueue(){
+ const current=await chrome.storage.local.get([QUEUE_GENERATION_KEY,X_SCAN_KEY,STATE_KEY]);
+ const generation=(current[QUEUE_GENERATION_KEY]||0)+1;
+ await chrome.storage.local.set({[QUEUE_GENERATION_KEY]:generation,[PAUSED_KEY]:true});
+ if(current[X_SCAN_KEY]?.status==="discovering")await chrome.storage.local.set({[X_SCAN_KEY]:{...current[X_SCAN_KEY],status:"cancelled",finishedAt:Date.now(),updatedAt:Date.now()}});
+ if(current[STATE_KEY])await chrome.storage.local.set({[STATE_KEY]:{...current[STATE_KEY],cancelled:true}});
+ const existing=await getQueue();
+ const ids=existing.filter(x=>x.state==="downloading"&&Number.isInteger(x.downloadId)).map(x=>x.downloadId);
+ await chrome.storage.local.set({[QUEUE_KEY]:[],xdl_stats:{found:0,downloaded:0,failed:0,queued:0},xdl_status:"Queue cleared"});
+ const cancelled=[];
+ for(const id of ids){try{await chrome.downloads.cancel(id);cancelled.push(id);}catch{}}
+ // Clear only after cancel calls have been issued; download events for removed IDs are ignored.
+ await chrome.storage.local.set({[QUEUE_KEY]:[],[PAUSED_KEY]:false,xdl_stats:{found:0,downloaded:0,failed:0,queued:0},xdl_status:"Queue cleared. "+cancelled.length+" active downloads cancelled."});
+ chrome.alarms.clear("xdl_queue_pump");
+ return {ok:true,removed:existing.length,cancelled:cancelled.length};
+}
 async function getQueue(){const x=await chrome.storage.local.get(QUEUE_KEY);return Array.isArray(x[QUEUE_KEY])?x[QUEUE_KEY]:[];}
 async function setQueue(q){await chrome.storage.local.set({[QUEUE_KEY]:q});await updateStats();}
-async function enqueue(items){
+async function enqueue(items,options={}){
+ const generation=options.generation??((await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0);
+ const currentGeneration=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;
+ if(generation!==currentGeneration)return {ok:false,added:0,retried:0,total:(await getQueue()).length};
  const q=await getQueue(),byKey=new Map(q.map(item=>[item.key||dedupeKey(item.url),item]));
  let added=0,retried=0;
  for(const item of items){
@@ -128,6 +153,8 @@ async function enqueue(items){
   const queued={...item,key,state:"pending",attempts:0,error:null,nextAttemptAt:0,addedAt:Date.now()};
   q.push(queued);byKey.set(key,queued);added++;
  }
+ const latestGeneration=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;
+ if(latestGeneration!==generation)return {ok:false,added:0,retried:0,total:(await getQueue()).length};
  await setQueue(q);
  if(added||retried)pumpQueue();
  return {ok:true,added,retried,total:q.length};
@@ -143,6 +170,7 @@ async function pumpQueue(){
  pumpRunning=true;
  try{
   const settings=await chrome.storage.local.get(PAUSED_KEY);if(settings[PAUSED_KEY])return;
+  const queueGeneration=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;
   const q=await getQueue();
   let slots=Math.max(0,MAX_PARALLEL-q.filter(x=>x.state==="downloading").length);
   const toStart=[];
@@ -156,7 +184,9 @@ async function pumpQueue(){
   await setQueue(q);
   // Serialize creation and ID persistence to prevent lost IDs from concurrent storage writes.
   for(const item of toStart){
-   try{await startDownload(item);}
+   const currentGeneration=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;
+   if(currentGeneration!==queueGeneration)break;
+   try{await startDownload(item,queueGeneration);}
    catch(e){
     const latest=await getQueue(),x=latest.find(y=>(y.key||dedupeKey(y.url))===item.key);
     if(x){
@@ -172,12 +202,12 @@ async function pumpQueue(){
   if(pumpRequested){pumpRequested=false;queueMicrotask(()=>pumpQueue());}
  }
 }
-async function startDownload(item){const organize=(await chrome.storage.local.get("xdl_organize_folders")).xdl_organize_folders===true;const sourceFolder=item.source==="x"?"X_Feed":item.source[0].toUpperCase()+item.source.slice(1);const tagFolder=safe(item.folderTag||"");const folder=organize?(item.source==="x"?sourceFolder:sourceFolder+(tagFolder?"/"+tagFolder:"")):"";const filename=(folder?folder+"/":"")+safe(item.postId||item.id||Date.now())+"."+ext(item.url);const id=await new Promise((resolve,reject)=>chrome.downloads.download({url:item.url,filename,conflictAction:"uniquify",saveAs:false},n=>{if(chrome.runtime.lastError)reject(new Error(chrome.runtime.lastError.message));else if(n==null)reject(new Error("Download was not created"));else resolve(n);}));const q=await getQueue(),x=q.find(y=>(y.key||dedupeKey(y.url))===(item.key||dedupeKey(item.url)));if(x){x.downloadId=id;await setQueue(q);}const [d]=await chrome.downloads.search({id});if(d?.state==="complete")await settleDownload(id,"complete");else if(d?.state==="interrupted")await settleDownload(id,"interrupted",d.error);}
+async function startDownload(item,generation){const organize=(await chrome.storage.local.get("xdl_organize_folders")).xdl_organize_folders===true;const sourceFolder=item.source==="x"?"X_Feed":item.source[0].toUpperCase()+item.source.slice(1);const tagFolder=safe(item.folderTag||"");const folder=organize?(item.source==="x"?sourceFolder:sourceFolder+(tagFolder?"/"+tagFolder:"")):"";const filename=(folder?folder+"/":"")+safe(item.postId||item.id||Date.now())+"."+ext(item.url);const id=await new Promise((resolve,reject)=>chrome.downloads.download({url:item.url,filename,conflictAction:"uniquify",saveAs:false},n=>{if(chrome.runtime.lastError)reject(new Error(chrome.runtime.lastError.message));else if(n==null)reject(new Error("Download was not created"));else resolve(n);}));const currentGeneration=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;const q=await getQueue(),x=q.find(y=>(y.key||dedupeKey(y.url))===(item.key||dedupeKey(item.url)));if(currentGeneration!==generation||!x){await chrome.downloads.cancel(id).catch(()=>{});return;}x.downloadId=id;await setQueue(q);const [d]=await chrome.downloads.search({id});if(d?.state==="complete")await settleDownload(id,"complete");else if(d?.state==="interrupted")await settleDownload(id,"interrupted",d.error);}
 async function settleDownload(id,state,error){const q=await getQueue(),x=q.find(y=>y.downloadId===id);if(!x)return;if(state==="complete"){x.state="complete";x.completedAt=Date.now();}else if(state==="interrupted"){x.error=error||"Download interrupted";if(x.attempts<4){x.state="pending";x.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,x.attempts));}else x.state="failed";}else return;await setQueue(q);chrome.alarms.create("xdl_queue_pump",{when:Date.now()+Math.max(1000,(x.nextAttemptAt||Date.now())-Date.now())});}
 function splitTags(s){return String(s||"").trim().split(/[\s,]+/).map(x=>x.trim().toLowerCase()).filter(Boolean);}
 function postTags(p){const raw=p.tag_string||p.tags||p.tag_string_general||"";return new Set((Array.isArray(raw)?raw:String(raw).split(/\s+/)).map(x=>String(x).toLowerCase()));}
 function isBlacklisted(p,blacklist){const tags=postTags(p);return blacklist.some(t=>tags.has(t));}
-async function startBooruSearch(o){const site=o?.site,tags=String(o?.tags||"").trim(),blacklist=splitTags(o?.blacklistTags),gelbooruUserId=String(o?.gelbooruUserId||"").trim(),gelbooruApiKey=String(o?.gelbooruApiKey||"").trim(),max=Math.max(1,Math.min(5000,Number(o?.maxPosts)||200));if(!tags)throw Error("At least one tag is required");if(!["danbooru","gelbooru","rule34"].includes(site))throw Error("Unsupported gallery");const folderTag=tags.split(/\s+/).find(t=>t&&!t.startsWith("-"))||"";await chrome.storage.local.set({[STATE_KEY]:{site,tags,max,blacklist,cancelled:false,startedAt:Date.now()},xdl_organize_folders:o.organizeFolders===true,xdl_stats:{found:0,downloaded:0,failed:0,queued:0}});await setStatus("Searching "+site+" for: "+tags);const posts=await fetchPosts(site,tags,max,blacklist,{gelbooruUserId,gelbooruApiKey}),items=posts.filter(p=>p.file_url&&!p.is_deleted&&!p.is_pending).map(p=>({url:p.file_url,source:site,postId:p.id,tags:[...postTags(p)],folderTag}));if(!items.length)throw Error("No original files matched. Check tags, blacklist, site access, or API availability.");await chrome.storage.local.set({xdl_stats:{found:items.length,downloaded:0,failed:0,queued:items.length}});await enqueue(items);await setStatus("Found "+items.length+" matching originals; downloads continue in background.");}
+async function startBooruSearch(o){const generation=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;const site=o?.site,tags=String(o?.tags||"").trim(),blacklist=splitTags(o?.blacklistTags),gelbooruUserId=String(o?.gelbooruUserId||"").trim(),gelbooruApiKey=String(o?.gelbooruApiKey||"").trim(),max=Math.max(1,Math.min(5000,Number(o?.maxPosts)||200));if(!tags)throw Error("At least one tag is required");if(!["danbooru","gelbooru","rule34"].includes(site))throw Error("Unsupported gallery");const folderTag=tags.split(/\s+/).find(t=>t&&!t.startsWith("-"))||"";await chrome.storage.local.set({[STATE_KEY]:{site,tags,max,blacklist,cancelled:false,startedAt:Date.now()},xdl_organize_folders:o.organizeFolders===true,xdl_stats:{found:0,downloaded:0,failed:0,queued:0}});await setStatus("Searching "+site+" for: "+tags);const posts=await fetchPosts(site,tags,max,blacklist,{gelbooruUserId,gelbooruApiKey});if(await searchCancelled()||generation!==((await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0))return;const items=posts.filter(p=>p.file_url&&!p.is_deleted&&!p.is_pending).map(p=>({url:p.file_url,source:site,postId:p.id,tags:[...postTags(p)],folderTag}));if(!items.length)throw Error("No original files matched. Check tags, blacklist, site access, or API availability.");await chrome.storage.local.set({xdl_stats:{found:items.length,downloaded:0,failed:0,queued:items.length}});await enqueue(items,{generation});await setStatus("Found "+items.length+" matching originals; downloads continue in background.");}
 async function stopBooruSearch(){const d=await chrome.storage.local.get(STATE_KEY);if(d[STATE_KEY])await chrome.storage.local.set({[STATE_KEY]:{...d[STATE_KEY],cancelled:true}});await setStatus("Search stopped; queued downloads remain active.");}
 async function searchCancelled(){const d=await chrome.storage.local.get(STATE_KEY);return d[STATE_KEY]?.cancelled===true;}
 async function fetchPosts(site,tags,max,blacklist,credentials={}){if(site==="gelbooru")return fetchGelbooruPosts(tags,max,blacklist,credentials);const out=[],size=100,searchTags=[tags,...blacklist.map(t=>"-"+t)].join(" ");for(let page=0;out.length<max&&page<Math.ceil(max/size)+4;page++){if(await searchCancelled())break;let u;if(site==="danbooru"){u=new URL("https://danbooru.donmai.us/posts.json");u.searchParams.set("tags",searchTags);u.searchParams.set("limit",String(Math.min(size,max-out.length)));u.searchParams.set("page",String(page+1));}else{u=new URL("https://api.rule34.xxx/index.php");for(const [k,v] of Object.entries({page:"dapi",s:"post",q:"index",json:"1",limit:String(Math.min(size,max-out.length)),pid:String(page),tags:searchTags}))u.searchParams.set(k,v);}const r=await fetch(u,{headers:{Accept:"application/json"}});if(!r.ok)throw Error(site+" API returned HTTP "+r.status);const data=await r.json(),posts=Array.isArray(data)?data:(Array.isArray(data?.post)?data.post:[]);if(!posts.length)break;out.push(...posts.filter(p=>!isBlacklisted(p,blacklist)));if(posts.length<size)break;}return out.slice(0,max);}
