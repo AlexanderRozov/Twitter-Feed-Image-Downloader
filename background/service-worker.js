@@ -98,7 +98,7 @@ function normalizeXMediaUrl(raw){
  try{
   const u=new URL(raw);
   if(u.hostname!=="pbs.twimg.com"||!u.pathname.includes("/media/"))return null;
-  const pathFormat=u.pathname.match(/\\.(jpe?g|png|webp|gif|avif)$/i)?.[1];
+  const pathFormat=u.pathname.match(/\.(jpe?g|png|webp|gif|avif)$/i)?.[1];
   const format=(u.searchParams.get("format")||pathFormat||"").toLowerCase();
   if(format&&!u.searchParams.has("format"))u.searchParams.set("format",format==="jpeg"?"jpg":format);
   // Keep X parameters such as media tags; only upgrade the requested image size.
@@ -172,7 +172,7 @@ function dedupeKey(raw){try{const u=new URL(raw);u.hash="";return u.origin+u.pat
 async function updateStats(){const q=await getQueue(),d=await chrome.storage.local.get("xdl_stats"),p=d.xdl_stats||{};const stats={found:p.found||0,downloaded:q.filter(x=>x.state==="complete").length,failed:q.filter(x=>x.state==="failed").length,queued:q.filter(x=>["pending","downloading"].includes(x.state)).length};await chrome.storage.local.set({xdl_stats:stats});chrome.runtime.sendMessage({type:"DOWNLOAD_STATUS",status:"Queue: "+stats.queued,stats}).catch(()=>{});}
 async function setStatus(status){await chrome.storage.local.set({xdl_status:status});const d=await chrome.storage.local.get("xdl_stats");chrome.runtime.sendMessage({type:"DOWNLOAD_STATUS",status,stats:d.xdl_stats||{}}).catch(()=>{});}
 function allowed(raw,source){try{const u=new URL(raw),h=u.hostname.toLowerCase();if(!/^https?:$/.test(u.protocol))return false;if(source==="x")return h==="pbs.twimg.com"&&u.pathname.includes("/media/");if(source==="danbooru")return h==="danbooru.donmai.us"||h.endsWith(".donmai.us");if(source==="gelbooru")return h==="gelbooru.com"||h.endsWith(".gelbooru.com");if(source==="rule34")return h==="rule34.xxx"||h.endsWith(".rule34.xxx");return false;}catch{return false;}}
-function ext(raw){try{const u=new URL(raw),e=u.pathname.match(/\.(jpe?g|png|webp|gif|avif)$/i)?.[1]?.toLowerCase();return e==="jpeg"?"jpg":e||"jpg";}catch{return "jpg";}}
+function ext(raw){try{const u=new URL(raw),pathExt=u.pathname.match(/\.(jpe?g|png|webp|gif|avif)$/i)?.[1]?.toLowerCase(),format=(u.searchParams.get("format")||"").toLowerCase(),e=pathExt||format;return e==="jpeg"?"jpg":/^(jpg|png|webp|gif|avif)$/.test(e)?e:"jpg";}catch{return "jpg";}}
 function safe(v){return String(v||"image").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,80);}
 async function pumpQueue(){
  if(pumpRunning){pumpRequested=true;return;}
