@@ -33,7 +33,7 @@ async function recoverQueue(){
   if(item.state!=="downloading")continue;
   if(!Number.isInteger(item.downloadId)){item.state="pending";item.nextAttemptAt=0;item.error="Recovered after browser restart";changed=true;continue;}
   const matches=await chrome.downloads.search({id:item.downloadId});const download=matches[0];
-  if(download?.state==="complete"){item.state="complete";item.completedAt=Date.now();changed=true;}
+  if(download?.state==="complete"){if(item.source==="x"&&isNonImageXDownload(download)){await discardNonImageXDownload(item.downloadId,download,item);}else{item.state="complete";item.completedAt=Date.now();}changed=true;}
   else if(download?.state==="interrupted"){item.error=download.error||"Download interrupted";item.state=item.attempts<4?"pending":"failed";item.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,item.attempts));changed=true;}
   else if(!download){item.state="pending";item.downloadId=null;item.nextAttemptAt=0;item.error="Download was not found after browser restart";changed=true;}
  }
@@ -95,7 +95,16 @@ async function addXScanBatch(items){
  return {ok:true,added,total:Object.keys(known).length,tweets:tweets.size,queued:queued.added||0,queueTotal:queued.total||0};
 }
 function normalizeXMediaUrl(raw){
- try{const u=new URL(raw);const format=u.searchParams.get("format");u.search="";if(format)u.searchParams.set("format",format);u.searchParams.set("name","orig");return u.href;}catch{return raw;}
+ try{
+  const u=new URL(raw);
+  if(u.hostname!=="pbs.twimg.com"||!u.pathname.includes("/media/"))return null;
+  const pathFormat=u.pathname.match(/\.(jpe?g|png|webp|gif|avif)$/i)?.[1];
+  const format=(u.searchParams.get("format")||pathFormat||"").toLowerCase();
+  if(format&&!u.searchParams.has("format"))u.searchParams.set("format",format==="jpeg"?"jpg":format);
+  // Keep X parameters such as media tags; only upgrade the requested image size.
+  u.searchParams.set("name","orig");
+  return u.href;
+ }catch{return null;}
 }
 function xMediaKey(raw){
  try{const u=new URL(raw),match=u.pathname.match(/\/media\/([^/.?]+)/);if(!match)return null;return match[1]+":"+(u.searchParams.get("format")||"");}catch{return null;}
@@ -163,7 +172,7 @@ function dedupeKey(raw){try{const u=new URL(raw);u.hash="";return u.origin+u.pat
 async function updateStats(){const q=await getQueue(),d=await chrome.storage.local.get("xdl_stats"),p=d.xdl_stats||{};const stats={found:p.found||0,downloaded:q.filter(x=>x.state==="complete").length,failed:q.filter(x=>x.state==="failed").length,queued:q.filter(x=>["pending","downloading"].includes(x.state)).length};await chrome.storage.local.set({xdl_stats:stats});chrome.runtime.sendMessage({type:"DOWNLOAD_STATUS",status:"Queue: "+stats.queued,stats}).catch(()=>{});}
 async function setStatus(status){await chrome.storage.local.set({xdl_status:status});const d=await chrome.storage.local.get("xdl_stats");chrome.runtime.sendMessage({type:"DOWNLOAD_STATUS",status,stats:d.xdl_stats||{}}).catch(()=>{});}
 function allowed(raw,source){try{const u=new URL(raw),h=u.hostname.toLowerCase();if(!/^https?:$/.test(u.protocol))return false;if(source==="x")return h==="pbs.twimg.com"&&u.pathname.includes("/media/");if(source==="danbooru")return h==="danbooru.donmai.us"||h.endsWith(".donmai.us");if(source==="gelbooru")return h==="gelbooru.com"||h.endsWith(".gelbooru.com");if(source==="rule34")return h==="rule34.xxx"||h.endsWith(".rule34.xxx");return false;}catch{return false;}}
-function ext(raw){try{const u=new URL(raw),e=u.pathname.match(/\.(jpe?g|png|webp|gif|avif)$/i)?.[1]?.toLowerCase();return e==="jpeg"?"jpg":e||"jpg";}catch{return "jpg";}}
+function ext(raw){try{const u=new URL(raw),pathExt=u.pathname.match(/\.(jpe?g|png|webp|gif|avif)$/i)?.[1]?.toLowerCase(),format=(u.searchParams.get("format")||"").toLowerCase(),e=pathExt||format;return e==="jpeg"?"jpg":/^(jpg|png|webp|gif|avif)$/.test(e)?e:"jpg";}catch{return "jpg";}}
 function safe(v){return String(v||"image").replace(/[^a-zA-Z0-9_-]/g,"_").slice(0,80);}
 async function pumpQueue(){
  if(pumpRunning){pumpRequested=true;return;}
@@ -203,7 +212,7 @@ async function pumpQueue(){
  }
 }
 async function startDownload(item,generation){const organize=(await chrome.storage.local.get("xdl_organize_folders")).xdl_organize_folders===true;const sourceFolder=item.source==="x"?"X_Feed":item.source[0].toUpperCase()+item.source.slice(1);const tagFolder=safe(item.folderTag||"");const folder=organize?(item.source==="x"?sourceFolder:sourceFolder+(tagFolder?"/"+tagFolder:"")):"";const filename=(folder?folder+"/":"")+safe(item.postId||item.id||Date.now())+"."+ext(item.url);const id=await new Promise((resolve,reject)=>chrome.downloads.download({url:item.url,filename,conflictAction:"uniquify",saveAs:false},n=>{if(chrome.runtime.lastError)reject(new Error(chrome.runtime.lastError.message));else if(n==null)reject(new Error("Download was not created"));else resolve(n);}));const currentGeneration=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;const q=await getQueue(),x=q.find(y=>(y.key||dedupeKey(y.url))===(item.key||dedupeKey(item.url)));if(currentGeneration!==generation||!x){await chrome.downloads.cancel(id).catch(()=>{});return;}x.downloadId=id;await setQueue(q);const [d]=await chrome.downloads.search({id});if(d?.state==="complete")await settleDownload(id,"complete");else if(d?.state==="interrupted")await settleDownload(id,"interrupted",d.error);}
-async function settleDownload(id,state,error){const q=await getQueue(),x=q.find(y=>y.downloadId===id);if(!x)return;if(state==="complete"){x.state="complete";x.completedAt=Date.now();}else if(state==="interrupted"){x.error=error||"Download interrupted";if(x.attempts<4){x.state="pending";x.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,x.attempts));}else x.state="failed";}else return;await setQueue(q);chrome.alarms.create("xdl_queue_pump",{when:Date.now()+Math.max(1000,(x.nextAttemptAt||Date.now())-Date.now())});}
+async function settleDownload(id,state,error){const q=await getQueue(),x=q.find(y=>y.downloadId===id);if(!x)return;if(state==="complete"){const matches=await chrome.downloads.search({id}),download=matches[0];if(x.source==="x"&&isNonImageXDownload(download)){await discardNonImageXDownload(id,download,x);}else{x.state="complete";x.completedAt=Date.now();}}else if(state==="interrupted"){x.error=error||"Download interrupted";if(x.attempts<4){x.state="pending";x.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,x.attempts));}else x.state="failed";}else return;await setQueue(q);chrome.alarms.create("xdl_queue_pump",{when:Date.now()+Math.max(1000,(x.nextAttemptAt||Date.now())-Date.now())});}
 function splitTags(s){return String(s||"").trim().split(/[\s,]+/).map(x=>x.trim().toLowerCase()).filter(Boolean);}
 function postTags(p){const raw=p.tag_string||p.tags||p.tag_string_general||"";return new Set((Array.isArray(raw)?raw:String(raw).split(/\s+/)).map(x=>String(x).toLowerCase()));}
 function isBlacklisted(p,blacklist){const tags=postTags(p);return blacklist.some(t=>tags.has(t));}
