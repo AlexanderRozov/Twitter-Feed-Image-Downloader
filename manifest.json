@@ -30,7 +30,4 @@
     "service_worker": "background/service-worker.js"
   },
   "options_page": "queue/queue.html",
-  "optional_permissions": [
-    "debugger"
-  ]
 }
