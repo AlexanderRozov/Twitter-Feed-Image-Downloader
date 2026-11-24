@@ -102,16 +102,20 @@
 
   function collectImages(article) {
     const result = new Set();
+    const tweetId = getTweetId(article);
+    const addCandidate = candidate => {
+      if (!candidate) return;
+      const normalized = normalizeImageUrl(candidate);
+      if (!normalized || result.has(normalized)) return;
+      result.add(normalized);
+      let format = "";
+      try { format = new URL(normalized).searchParams.get("format") || ""; } catch {}
+      chrome.runtime.sendMessage({type:"DIAGNOSTICS_LOG",entry:{event:"X_IMAGE_DISCOVERED",tweetId,originalUrl:candidate,normalizedUrl:normalized,format}}).catch(()=>{});
+    };
     for (const img of article.querySelectorAll("img")) {
-      for (const candidate of [img.currentSrc, img.src, img.getAttribute("src"), img.getAttribute("data-src")]) {
-        const normalized = normalizeImageUrl(candidate);
-        if (normalized) result.add(normalized);
-      }
+      for (const candidate of [img.currentSrc, img.src, img.getAttribute("src"), img.getAttribute("data-src")]) addCandidate(candidate);
       const srcset = img.getAttribute("srcset") || "";
-      for (const entry of srcset.split(",")) {
-        const normalized = normalizeImageUrl(entry.trim().split(/\s+/)[0]);
-        if (normalized) result.add(normalized);
-      }
+      for (const entry of srcset.split(",")) addCandidate(entry.trim().split(/\\s+/)[0]);
     }
     return [...result];
   }
