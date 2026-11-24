@@ -18,8 +18,9 @@
       const pathFormat = url.pathname.match(/\.(jpe?g|png|webp|gif|avif)$/i)?.[1];
       const format = (url.searchParams.get("format") || pathFormat || "").toLowerCase();
       if (format && !url.searchParams.has("format")) url.searchParams.set("format", format === "jpeg" ? "jpg" : format);
-      // Preserve X media parameters (for example tag) and request the original rendition.
-      url.searchParams.set("name", "orig");
+      // Preserve the rendition selected by X (orig/large/medium/small/thumb).
+      // Forcing "orig" can produce HTTP 404 even when other renditions exist.
+      if (!url.searchParams.has("name")) url.searchParams.set("name", "large");
       return url.href;
     } catch { return null; }
   }
