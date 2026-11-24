@@ -15,7 +15,7 @@
     try {
       const url = new URL(src, location.href);
       if (url.hostname !== "pbs.twimg.com" || !url.pathname.includes("/media/")) return null;
-      const pathFormat = url.pathname.match(/\\.(jpe?g|png|webp|gif|avif)$/i)?.[1];
+      const pathFormat = url.pathname.match(/\.(jpe?g|png|webp|gif|avif)$/i)?.[1];
       const format = (url.searchParams.get("format") || pathFormat || "").toLowerCase();
       if (format && !url.searchParams.has("format")) url.searchParams.set("format", format === "jpeg" ? "jpg" : format);
       // Preserve X media parameters (for example tag) and request the original rendition.
