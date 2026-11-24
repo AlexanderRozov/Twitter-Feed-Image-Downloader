@@ -16,6 +16,7 @@ chrome.runtime.onMessage.addListener((m,s,reply)=>{
  case "STOP_BOORU_SEARCH": await stopBooruSearch();return {ok:true};
  case "DIAGNOSTICS_LOG": await addDiagnosticLog(m.entry||{});return {ok:true};
  case "DIAGNOSTICS_PROBE_URL": return await probeXMediaUrl(m.url);
+ case "DIAGNOSTICS_PROBE_RENDITIONS": return await probeXMediaRenditions(m.url);
  case "DIAGNOSTICS_GET": return {entries:await getDiagnosticLog()};
  case "DIAGNOSTICS_CLEAR": await chrome.storage.local.set({[DIAGNOSTICS_KEY]:[]});return {ok:true};
  case "QUEUE_GET": return {queue:await getQueue(),paused:(await chrome.storage.local.get(PAUSED_KEY))[PAUSED_KEY]===true};
@@ -165,6 +166,15 @@ async function probeXMediaUrl(raw){
   const entry={event:"CDN_FETCH_PROBE",requestedUrl:u.href,responseUrl:response.url,status:response.status,statusText:response.statusText,ok:response.ok,redirected:response.redirected,type:response.type,headers,sampleText:sample,sampleHex:hex,elapsedMs:Date.now()-started};
   await addDiagnosticLog(entry);return {ok:true,status:response.status,mime:headers["content-type"],sampleText:sample,elapsedMs:entry.elapsedMs};
  }catch(e){const entry={event:"CDN_FETCH_PROBE_ERROR",requestedUrl:u.href,error:e.message,elapsedMs:Date.now()-started};await addDiagnosticLog(entry);return {ok:false,error:e.message};}
+}
+async function probeXMediaRenditions(raw){
+ let base;try{base=new URL(raw);}catch{return {ok:false,error:"Invalid URL"};}
+ if(base.hostname!=="pbs.twimg.com"||!base.pathname.includes("/media/"))return {ok:false,error:"Only pbs.twimg.com media URLs can be probed"};
+ const names=["orig","large","medium","small","thumb"],results=[];
+ for(const name of names){const candidate=new URL(base.href);candidate.searchParams.set("name",name);const result=await probeXMediaUrl(candidate.href);results.push({name,...result});}
+ const summary={event:"CDN_RENDITION_COMPARISON",requestedUrl:base.href,results,workingNames:results.filter(x=>x.ok&&x.status>=200&&x.status<300).map(x=>x.name),timestamp:new Date().toISOString()};
+ await addDiagnosticLog(summary);
+ return {ok:true,results:summary.results,workingNames:summary.workingNames};
 }
 async function getDiagnosticLog(){const x=await chrome.storage.local.get(DIAGNOSTICS_KEY);return Array.isArray(x[DIAGNOSTICS_KEY])?x[DIAGNOSTICS_KEY]:[];}
 function sanitizeDiagnosticUrl(raw){try{const u=new URL(raw);for(const key of [...u.searchParams.keys()])if(/^(token|access_token|auth|authorization|api_key|apikey|key|signature|sig)$/i.test(key))u.searchParams.set(key,"[redacted]");return u.href;}catch{return raw||null;}}
