@@ -111,8 +111,9 @@ function normalizeXMediaUrl(raw){
   const pathFormat=u.pathname.match(/\.(jpe?g|png|webp|gif|avif)$/i)?.[1];
   const format=(u.searchParams.get("format")||pathFormat||"").toLowerCase();
   if(format&&!u.searchParams.has("format"))u.searchParams.set("format",format==="jpeg"?"jpg":format);
-  // Keep X parameters such as media tags; only upgrade the requested image size.
-  u.searchParams.set("name","orig");
+  // Preserve the rendition selected by X. Some media IDs return 404 for "orig"
+  // while "large", "medium", "small", or "thumb" remain available.
+  if(!u.searchParams.has("name"))u.searchParams.set("name","large");
   return u.href;
  }catch{return null;}
 }
