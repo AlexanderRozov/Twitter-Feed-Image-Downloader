@@ -1,8 +1,8 @@
-const QUEUE_KEY="xdl_download_queue",STATE_KEY="xdl_booru_job",PAUSED_KEY="xdl_queue_paused",QUEUE_GENERATION_KEY="xdl_queue_generation",DIAGNOSTICS_KEY="xdl_diagnostic_log",MAX_DIAGNOSTICS=500,MAX_PARALLEL=3;
+const QUEUE_KEY="xdl_download_queue",STATE_KEY="xdl_booru_job",PAUSED_KEY="xdl_queue_paused",QUEUE_GENERATION_KEY="xdl_queue_generation",DIAGNOSTICS_KEY="xdl_diagnostic_log",MAX_DIAGNOSTICS=500,MAX_PARALLEL=3;const DOWNLOAD_STALL_TIMEOUT_MS=10*60*1000;
 let pumpRunning=false,pumpRequested=false;
 chrome.runtime.onInstalled.addListener(()=>{chrome.alarms.create("xdl_queue_pump",{periodInMinutes:1});recoverQueue().catch(console.error);});
 chrome.runtime.onStartup.addListener(()=>recoverQueue().catch(console.error));
-chrome.alarms.onAlarm.addListener(a=>{if(a.name==="xdl_queue_pump")pumpQueue();});
+chrome.alarms.onAlarm.addListener(a=>{if(a.name==="xdl_queue_pump")recoverQueue().catch(console.error);});
 chrome.runtime.onMessage.addListener((m,s,reply)=>{
  const run=async()=>{switch(m.type){
  case "DOWNLOAD_IMAGE": await enqueue([{url:m.url,source:"x",postId:m.tweetId,tags:[]}]);return {ok:true};
@@ -38,16 +38,45 @@ async function handleDownloadChanged(change){
  if(change.state)await settleDownload(change.id,change.state.current,change.error?.current);
 }
 async function recoverQueue(){
- const q=await getQueue();let changed=false;
+ const q=await getQueue();let changed=false;const now=Date.now(),cancelIds=[];
  for(const item of q){
   if(item.state!=="downloading")continue;
-  if(!Number.isInteger(item.downloadId)){item.state="pending";item.nextAttemptAt=0;item.error="Recovered after browser restart";changed=true;continue;}
-  const matches=await chrome.downloads.search({id:item.downloadId});const download=matches[0];
-  if(download?.state==="complete"){if(item.source==="x"&&isNonImageXDownload(download)){await discardNonImageXDownload(item.downloadId,download,item);}else{item.state="complete";item.completedAt=Date.now();}changed=true;}
-  else if(download?.state==="interrupted"){item.error=download.error||"Download interrupted";item.state=item.attempts<4?"pending":"failed";item.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,item.attempts));changed=true;}
-  else if(!download){item.state="pending";item.downloadId=null;item.nextAttemptAt=0;item.error="Download was not found after browser restart";changed=true;}
+  if(!Number.isInteger(item.downloadId)){item.state="pending";item.nextAttemptAt=0;item.error="Recovered without a browser download ID";item.lastProgressAt=0;changed=true;continue;}
+  const matches=await chrome.downloads.search({id:item.downloadId}),download=matches[0];
+  if(download?.state==="complete"){
+   if(item.source==="x"&&isNonImageXDownload(download)){await discardNonImageXDownload(item.downloadId,download,item);}
+   else{item.state="complete";item.completedAt=Date.now();}
+   changed=true;
+  }
+  else if(download?.state==="interrupted"){
+   item.error=download.error||"Download interrupted";item.state=item.attempts<4?"pending":"failed";item.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,item.attempts));item.downloadId=null;item.lastProgressAt=0;changed=true;
+  }
+  else if(!download){
+   item.state="pending";item.downloadId=null;item.nextAttemptAt=0;item.error="Download was not found by Chrome; queued again";item.lastProgressAt=0;changed=true;
+  }
+  else if(download.state==="in_progress"){
+   const received=Number(download.bytesReceived)||0;
+   if(!Number.isFinite(item.lastProgressAt)||!item.lastProgressAt||received!==Number(item.lastProgressBytes||0)){
+    item.lastProgressAt=now;item.lastProgressBytes=received;changed=true;
+   }else if(now-item.lastProgressAt>=DOWNLOAD_STALL_TIMEOUT_MS){
+    const oldId=item.downloadId;
+    item.error="Download stalled: no byte progress for 10 minutes";
+    item.state=item.attempts<4?"pending":"failed";
+    item.nextAttemptAt=item.state==="pending"?now+Math.min(60000,2000*Math.pow(2,item.attempts)):0;
+    item.lastProgressAt=0;item.lastProgressBytes=0;
+    cancelIds.push({id:oldId,key:item.key||dedupeKey(item.url)});
+    changed=true;
+    await addDiagnosticLog({event:"DOWNLOAD_STALL_RECOVERED",downloadId:oldId,postId:item.postId,url:item.url,bytesReceived:received,attempts:item.attempts,nextState:item.state});
+   }
+  }
  }
- if(changed)await setQueue(q);pumpQueue();
+ if(changed)await setQueue(q);
+ for(const stalled of cancelIds){
+  try{await chrome.downloads.cancel(stalled.id);}catch{}
+  const latest=await getQueue(),item=latest.find(x=>(x.key||dedupeKey(x.url))===stalled.key);
+  if(item&&item.downloadId===stalled.id){item.downloadId=null;await setQueue(latest);}
+ }
+ pumpQueue();
 }
 const X_DEBUGGER_TABS_KEY="xdl_debugger_tab_ids";
 async function attachXBackground(tabId){
@@ -252,8 +281,8 @@ async function pumpQueue(){
   if(pumpRequested){pumpRequested=false;queueMicrotask(()=>pumpQueue());}
  }
 }
-async function startDownload(item,generation){await addDiagnosticLog({event:"DOWNLOAD_START_REQUEST",source:item.source,postId:item.postId,url:item.url,filenameExtension:ext(item.url),attempt:item.attempts});const organize=(await chrome.storage.local.get("xdl_organize_folders")).xdl_organize_folders===true;const sourceFolder=item.source==="x"?"X_Feed":item.source[0].toUpperCase()+item.source.slice(1);const tagFolder=safe(item.folderTag||"");const folder=organize?(item.source==="x"?sourceFolder:sourceFolder+(tagFolder?"/"+tagFolder:"")):"";const filename=(folder?folder+"/":"")+safe(item.postId||item.id||Date.now())+"."+ext(item.url);const id=await new Promise((resolve,reject)=>chrome.downloads.download({url:item.url,filename,conflictAction:"uniquify",saveAs:false},n=>{if(chrome.runtime.lastError)reject(new Error(chrome.runtime.lastError.message));else if(n==null)reject(new Error("Download was not created"));else resolve(n);}));const currentGeneration=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;const q=await getQueue(),x=q.find(y=>(y.key||dedupeKey(y.url))===(item.key||dedupeKey(item.url)));if(currentGeneration!==generation||!x){await chrome.downloads.cancel(id).catch(()=>{});return;}x.downloadId=id;await setQueue(q);await addDiagnosticLog({event:"DOWNLOAD_CREATED",downloadId:id,source:item.source,postId:item.postId,url:item.url,filename});const [d]=await chrome.downloads.search({id});if(d?.state==="complete")await settleDownload(id,"complete");else if(d?.state==="interrupted")await settleDownload(id,"interrupted",d.error);}
-async function settleDownload(id,state,error){const q=await getQueue(),x=q.find(y=>y.downloadId===id);if(!x){await addDiagnosticLog({event:"DOWNLOAD_EVENT_WITHOUT_QUEUE_ITEM",downloadId:id,state,error:error||null});return;}if(x.state!=="downloading"){await addDiagnosticLog({event:"DOWNLOAD_DUPLICATE_SETTLE_IGNORED",downloadId:id,currentQueueState:x.state,reportedState:state,error:error||null});return;}if(state==="complete"){const matches=await chrome.downloads.search({id}),download=matches[0];await addDiagnosticLog({event:"DOWNLOAD_SETTLE_COMPLETE",downloadId:id,postId:x.postId,url:x.url,download:download?{mime:download.mime,filename:download.filename,finalUrl:download.finalUrl,fileSize:download.fileSize,totalBytes:download.totalBytes,state:download.state}:null});if(x.source==="x"&&isNonImageXDownload(download)){await discardNonImageXDownload(id,download,x);}else{x.state="complete";x.completedAt=Date.now();}}else if(state==="interrupted"){await addDiagnosticLog({event:"DOWNLOAD_SETTLE_INTERRUPTED",downloadId:id,postId:x.postId,url:x.url,error:error||null,attempts:x.attempts});x.error=error||"Download interrupted";if(x.attempts<4){x.state="pending";x.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,x.attempts));}else x.state="failed";}else return;await setQueue(q);chrome.alarms.create("xdl_queue_pump",{when:Date.now()+Math.max(1000,(x.nextAttemptAt||Date.now())-Date.now())});}
+async function startDownload(item,generation){await addDiagnosticLog({event:"DOWNLOAD_START_REQUEST",source:item.source,postId:item.postId,url:item.url,filenameExtension:ext(item.url),attempt:item.attempts});const organize=(await chrome.storage.local.get("xdl_organize_folders")).xdl_organize_folders===true;const sourceFolder=item.source==="x"?"X_Feed":item.source[0].toUpperCase()+item.source.slice(1);const tagFolder=safe(item.folderTag||"");const folder=organize?(item.source==="x"?sourceFolder:sourceFolder+(tagFolder?"/"+tagFolder:"")):"";const filename=(folder?folder+"/":"")+safe(item.postId||item.id||Date.now())+"."+ext(item.url);const id=await new Promise((resolve,reject)=>chrome.downloads.download({url:item.url,filename,conflictAction:"uniquify",saveAs:false},n=>{if(chrome.runtime.lastError)reject(new Error(chrome.runtime.lastError.message));else if(n==null)reject(new Error("Download was not created"));else resolve(n);}));const currentGeneration=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;const q=await getQueue(),x=q.find(y=>(y.key||dedupeKey(y.url))===(item.key||dedupeKey(item.url)));if(currentGeneration!==generation||!x){await chrome.downloads.cancel(id).catch(()=>{});return;}x.downloadId=id;x.lastProgressAt=Date.now();x.lastProgressBytes=0;await setQueue(q);await addDiagnosticLog({event:"DOWNLOAD_CREATED",downloadId:id,source:item.source,postId:item.postId,url:item.url,filename});const [d]=await chrome.downloads.search({id});if(d?.state==="complete")await settleDownload(id,"complete");else if(d?.state==="interrupted")await settleDownload(id,"interrupted",d.error);}
+async function settleDownload(id,state,error){const q=await getQueue(),x=q.find(y=>y.downloadId===id);if(!x){await addDiagnosticLog({event:"DOWNLOAD_EVENT_WITHOUT_QUEUE_ITEM",downloadId:id,state,error:error||null});return;}if(x.state!=="downloading"){await addDiagnosticLog({event:"DOWNLOAD_DUPLICATE_SETTLE_IGNORED",downloadId:id,currentQueueState:x.state,reportedState:state,error:error||null});return;}if(state==="complete"){const matches=await chrome.downloads.search({id}),download=matches[0];await addDiagnosticLog({event:"DOWNLOAD_SETTLE_COMPLETE",downloadId:id,postId:x.postId,url:x.url,download:download?{mime:download.mime,filename:download.filename,finalUrl:download.finalUrl,fileSize:download.fileSize,totalBytes:download.totalBytes,state:download.state}:null});if(x.source==="x"&&isNonImageXDownload(download)){await discardNonImageXDownload(id,download,x);}else{x.state="complete";x.completedAt=Date.now();}}else if(state==="interrupted"){await addDiagnosticLog({event:"DOWNLOAD_SETTLE_INTERRUPTED",downloadId:id,postId:x.postId,url:x.url,error:error||null,attempts:x.attempts});x.error=error||"Download interrupted";if(x.attempts<4){x.state="pending";x.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,x.attempts));}else x.state="failed";}else return;await setQueue(q);pumpQueue();if(x.state==="pending"&&x.nextAttemptAt>Date.now())chrome.alarms.create("xdl_queue_pump",{when:x.nextAttemptAt});}
 function splitTags(s){return String(s||"").trim().split(/[\s,]+/).map(x=>x.trim().toLowerCase()).filter(Boolean);}
 function postTags(p){const raw=p.tag_string||p.tags||p.tag_string_general||"";return new Set((Array.isArray(raw)?raw:String(raw).split(/\s+/)).map(x=>String(x).toLowerCase()));}
 function isBlacklisted(p,blacklist){const tags=postTags(p);return blacklist.some(t=>tags.has(t));}
