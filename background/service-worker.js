@@ -1,4 +1,4 @@
-const QUEUE_KEY="xdl_download_queue",STATE_KEY="xdl_booru_job",PAUSED_KEY="xdl_queue_paused",QUEUE_GENERATION_KEY="xdl_queue_generation",DIAGNOSTICS_KEY="xdl_diagnostic_log",MAX_DIAGNOSTICS=500,MAX_PARALLEL=3;const DOWNLOAD_STALL_TIMEOUT_MS=10*60*1000;
+const QUEUE_KEY="xdl_download_queue",STATE_KEY="xdl_booru_job",PAUSED_KEY="xdl_queue_paused",QUEUE_GENERATION_KEY="xdl_queue_generation",DIAGNOSTICS_KEY="xdl_diagnostic_log",DOWNLOAD_DIAGNOSTICS_KEY="xdl_download_diagnostic_log",MAX_DIAGNOSTICS=500,MAX_DOWNLOAD_DIAGNOSTICS=500,MAX_PARALLEL=3;const DOWNLOAD_STALL_TIMEOUT_MS=10*60*1000,DOWNLOAD_START_TIMEOUT_MS=90*1000;
 let pumpRunning=false,pumpRequested=false;
 chrome.runtime.onInstalled.addListener(()=>{chrome.alarms.create("xdl_queue_pump",{periodInMinutes:1});recoverQueue().catch(console.error);});
 chrome.runtime.onStartup.addListener(()=>recoverQueue().catch(console.error));
@@ -17,8 +17,8 @@ chrome.runtime.onMessage.addListener((m,s,reply)=>{
  case "DIAGNOSTICS_LOG": await addDiagnosticLog(m.entry||{});return {ok:true};
  case "DIAGNOSTICS_PROBE_URL": return await probeXMediaUrl(m.url);
  case "DIAGNOSTICS_PROBE_RENDITIONS": return await probeXMediaRenditions(m.url);
- case "DIAGNOSTICS_GET": return {entries:await getDiagnosticLog()};
- case "DIAGNOSTICS_CLEAR": await chrome.storage.local.set({[DIAGNOSTICS_KEY]:[]});return {ok:true};
+ case "DIAGNOSTICS_GET": return await getDiagnosticSnapshot();
+ case "DIAGNOSTICS_CLEAR": await chrome.storage.local.set({[DIAGNOSTICS_KEY]:[],[DOWNLOAD_DIAGNOSTICS_KEY]:[]});return {ok:true};
  case "QUEUE_GET": return {queue:await getQueue(),paused:(await chrome.storage.local.get(PAUSED_KEY))[PAUSED_KEY]===true};
  case "QUEUE_PAUSE": await chrome.storage.local.set({[PAUSED_KEY]:true});return {ok:true};
  case "QUEUE_RESUME": await chrome.storage.local.set({[PAUSED_KEY]:false});pumpQueue();return {ok:true};
@@ -41,31 +41,46 @@ async function recoverQueue(){
  const q=await getQueue();let changed=false;const now=Date.now(),cancelIds=[];
  for(const item of q){
   if(item.state!=="downloading")continue;
-  if(!Number.isInteger(item.downloadId)){item.state="pending";item.nextAttemptAt=0;item.error="Recovered without a browser download ID";item.lastProgressAt=0;changed=true;continue;}
-  const matches=await chrome.downloads.search({id:item.downloadId}),download=matches[0];
+  let download=null;
+  if(!Number.isInteger(item.downloadId)){
+   const requestedAt=Number(item.startRequestedAt)||0;
+   if(requestedAt){
+    const candidates=await chrome.downloads.search({url:item.url});
+    const candidate=candidates.filter(d=>Number.isInteger(d.id)&&d.startTime&&Date.parse(d.startTime)>=requestedAt-5000).sort((x,y)=>Date.parse(y.startTime)-Date.parse(x.startTime))[0];
+    if(candidate){
+     item.downloadId=candidate.id;item.startRequestedAt=0;download=candidate;changed=true;
+     await addDiagnosticLog({event:"DOWNLOAD_CREATE_RECOVERED_BY_URL",downloadId:candidate.id,postId:item.postId,url:item.url,state:candidate.state});
+    }else if(now-requestedAt<DOWNLOAD_START_TIMEOUT_MS){continue;}
+    else{
+     item.error="Download creation timed out before Chrome returned a download ID";
+     item.state=item.attempts<4?"pending":"failed";
+     item.nextAttemptAt=item.state==="pending"?now+Math.min(60000,2000*Math.pow(2,item.attempts)):0;
+     item.startRequestedAt=0;item.downloadId=null;item.lastProgressAt=0;changed=true;
+     await addDiagnosticLog({event:"DOWNLOAD_CREATE_TIMEOUT_RECOVERED",postId:item.postId,url:item.url,attempts:item.attempts,nextState:item.state});
+     continue;
+    }
+   }else{
+    item.state="pending";item.nextAttemptAt=0;item.error="Recovered legacy queue item without a browser download ID";item.lastProgressAt=0;changed=true;
+    continue;
+   }
+  }
+  if(!download){const matches=await chrome.downloads.search({id:item.downloadId});download=matches[0];}
   if(download?.state==="complete"){
    if(item.source==="x"&&isNonImageXDownload(download)){await discardNonImageXDownload(item.downloadId,download,item);}
    else{item.state="complete";item.completedAt=Date.now();}
-   changed=true;
-  }
-  else if(download?.state==="interrupted"){
-   item.error=download.error||"Download interrupted";item.state=item.attempts<4?"pending":"failed";item.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,item.attempts));item.downloadId=null;item.lastProgressAt=0;changed=true;
-  }
-  else if(!download){
-   item.state="pending";item.downloadId=null;item.nextAttemptAt=0;item.error="Download was not found by Chrome; queued again";item.lastProgressAt=0;changed=true;
-  }
-  else if(download.state==="in_progress"){
+   item.startRequestedAt=0;changed=true;
+  }else if(download?.state==="interrupted"){
+   item.error=download.error||"Download interrupted";item.state=item.attempts<4?"pending":"failed";item.nextAttemptAt=item.state==="pending"?Date.now()+Math.min(60000,2000*Math.pow(2,item.attempts)):0;item.downloadId=null;item.startRequestedAt=0;item.lastProgressAt=0;changed=true;
+  }else if(!download){
+   item.state="pending";item.downloadId=null;item.startRequestedAt=0;item.nextAttemptAt=0;item.error="Download was not found by Chrome; queued again";item.lastProgressAt=0;changed=true;
+  }else if(download.state==="in_progress"){
    const received=Number(download.bytesReceived)||0;
    if(!Number.isFinite(item.lastProgressAt)||!item.lastProgressAt||received!==Number(item.lastProgressBytes||0)){
     item.lastProgressAt=now;item.lastProgressBytes=received;changed=true;
    }else if(now-item.lastProgressAt>=DOWNLOAD_STALL_TIMEOUT_MS){
-    const oldId=item.downloadId;
-    item.error="Download stalled: no byte progress for 10 minutes";
-    item.state=item.attempts<4?"pending":"failed";
-    item.nextAttemptAt=item.state==="pending"?now+Math.min(60000,2000*Math.pow(2,item.attempts)):0;
-    item.lastProgressAt=0;item.lastProgressBytes=0;
-    cancelIds.push({id:oldId,key:item.key||dedupeKey(item.url)});
-    changed=true;
+    const oldId=item.downloadId;item.error="Download stalled: no byte progress for 10 minutes";
+    item.state=item.attempts<4?"pending":"failed";item.nextAttemptAt=item.state==="pending"?now+Math.min(60000,2000*Math.pow(2,item.attempts)):0;
+    item.lastProgressAt=0;item.lastProgressBytes=0;cancelIds.push({id:oldId,key:item.key||dedupeKey(item.url)});changed=true;
     await addDiagnosticLog({event:"DOWNLOAD_STALL_RECOVERED",downloadId:oldId,postId:item.postId,url:item.url,bytesReceived:received,attempts:item.attempts,nextState:item.state});
    }
   }
@@ -76,6 +91,7 @@ async function recoverQueue(){
   const latest=await getQueue(),item=latest.find(x=>(x.key||dedupeKey(x.url))===stalled.key);
   if(item&&item.downloadId===stalled.id){item.downloadId=null;await setQueue(latest);}
  }
+ await addDiagnosticLog({event:"QUEUE_RECOVERY_COMPLETED",queueTotal:q.length,downloading:q.filter(x=>x.state==="downloading").length,pending:q.filter(x=>x.state==="pending").length,failed:q.filter(x=>x.state==="failed").length,reconciled:changed});
  pumpQueue();
 }
 const X_DEBUGGER_TABS_KEY="xdl_debugger_tab_ids";
@@ -206,9 +222,27 @@ async function probeXMediaRenditions(raw){
  await addDiagnosticLog(summary);
  return {ok:true,results:summary.results,workingNames:summary.workingNames};
 }
-async function getDiagnosticLog(){const x=await chrome.storage.local.get(DIAGNOSTICS_KEY);return Array.isArray(x[DIAGNOSTICS_KEY])?x[DIAGNOSTICS_KEY]:[];}
+async function getDiagnosticLog(key=DIAGNOSTICS_KEY){const x=await chrome.storage.local.get(key);return Array.isArray(x[key])?x[key]:[];}
 function sanitizeDiagnosticUrl(raw){try{const u=new URL(raw);for(const key of [...u.searchParams.keys()])if(/^(token|access_token|auth|authorization|api_key|apikey|key|signature|sig)$/i.test(key))u.searchParams.set(key,"[redacted]");return u.href;}catch{return raw||null;}}
-async function addDiagnosticLog(entry){const current=await getDiagnosticLog();const safeEntry={timestamp:new Date().toISOString(),...entry};for(const key of Object.keys(safeEntry))if(/url/i.test(key)&&typeof safeEntry[key]==="string")safeEntry[key]=sanitizeDiagnosticUrl(safeEntry[key]);if(safeEntry.download){for(const key of ["url","finalUrl"])if(typeof safeEntry.download[key]==="string")safeEntry.download[key]=sanitizeDiagnosticUrl(safeEntry.download[key]);}current.push(safeEntry);if(current.length>MAX_DIAGNOSTICS)current.splice(0,current.length-MAX_DIAGNOSTICS);await chrome.storage.local.set({[DIAGNOSTICS_KEY]:current});}
+async function addDiagnosticLog(entry){
+ const safeEntry={timestamp:new Date().toISOString(),...entry};
+ for(const key of Object.keys(safeEntry))if(/url/i.test(key)&&typeof safeEntry[key]==="string")safeEntry[key]=sanitizeDiagnosticUrl(safeEntry[key]);
+ if(safeEntry.download){for(const key of ["url","finalUrl"])if(typeof safeEntry.download[key]==="string")safeEntry.download[key]=sanitizeDiagnosticUrl(safeEntry.download[key]);}
+ const isDownloadEvent=/^(DOWNLOAD_|QUEUE_(?:PUMP|RECOVERY)_)/.test(String(safeEntry.event||""));
+ const key=isDownloadEvent?DOWNLOAD_DIAGNOSTICS_KEY:DIAGNOSTICS_KEY,limit=isDownloadEvent?MAX_DOWNLOAD_DIAGNOSTICS:MAX_DIAGNOSTICS;
+ const current=await getDiagnosticLog(key);current.push(safeEntry);if(current.length>limit)current.splice(0,current.length-limit);
+ await chrome.storage.local.set({[key]:current});
+}
+async function getDiagnosticSnapshot(){
+ const q=await getQueue(),counts={pending:0,downloading:0,complete:0,failed:0};
+ for(const item of q)counts[item.state]=(counts[item.state]||0)+1;
+ const active=await chrome.downloads.search({state:"in_progress"});
+ return {
+  entries:await getDiagnosticLog(),downloadEntries:await getDiagnosticLog(DOWNLOAD_DIAGNOSTICS_KEY),
+  queueSnapshot:{capturedAt:new Date().toISOString(),total:q.length,counts,items:q.map(item=>({source:item.source||null,postId:item.postId||null,url:sanitizeDiagnosticUrl(item.url),state:item.state,attempts:item.attempts||0,downloadId:Number.isInteger(item.downloadId)?item.downloadId:null,startRequestedAt:item.startRequestedAt||null,lastProgressAt:item.lastProgressAt||null,lastProgressBytes:item.lastProgressBytes||0,nextAttemptAt:item.nextAttemptAt||0,error:item.error||null}))},
+  activeDownloads:active.slice(0,100).map(d=>({id:d.id,state:d.state,error:d.error||null,url:sanitizeDiagnosticUrl(d.url),finalUrl:sanitizeDiagnosticUrl(d.finalUrl),filename:d.filename||null,bytesReceived:d.bytesReceived||0,totalBytes:d.totalBytes||0,paused:d.paused===true,startTime:d.startTime||null}))
+ };
+}
 async function getQueue(){const x=await chrome.storage.local.get(QUEUE_KEY);return Array.isArray(x[QUEUE_KEY])?x[QUEUE_KEY]:[];}
 async function setQueue(q){await chrome.storage.local.set({[QUEUE_KEY]:q});await updateStats();}
 async function enqueue(items,options={}){
@@ -256,7 +290,7 @@ async function pumpQueue(){
    if(!slots)break;
    if(item.state!=="pending"||(item.nextAttemptAt&&item.nextAttemptAt>Date.now()))continue;
    if(!allowed(item.url,item.source)){item.state="failed";item.error="URL host not allowed";continue;}
-   item.state="downloading";item.attempts++;toStart.push({...item});slots--;
+   item.state="downloading";item.attempts++;item.startRequestedAt=Date.now();toStart.push({...item});slots--;
   }
   // Persist before starting downloads; never overwrite later download IDs with this snapshot.
   await setQueue(q);
@@ -268,7 +302,7 @@ async function pumpQueue(){
    catch(e){
     const latest=await getQueue(),x=latest.find(y=>(y.key||dedupeKey(y.url))===item.key);
     if(x){
-     x.error=e.message;x.state=x.attempts<4?"pending":"failed";
+     x.error=e.message;x.startRequestedAt=0;x.downloadId=null;x.state=x.attempts<4?"pending":"failed";
      await addDiagnosticLog({event:"DOWNLOAD_START_ERROR",source:x.source,postId:x.postId,url:x.url,attempts:x.attempts,error:e.message});
      x.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,x.attempts));
      await setQueue(latest);
@@ -281,7 +315,7 @@ async function pumpQueue(){
   if(pumpRequested){pumpRequested=false;queueMicrotask(()=>pumpQueue());}
  }
 }
-async function startDownload(item,generation){await addDiagnosticLog({event:"DOWNLOAD_START_REQUEST",source:item.source,postId:item.postId,url:item.url,filenameExtension:ext(item.url),attempt:item.attempts});const organize=(await chrome.storage.local.get("xdl_organize_folders")).xdl_organize_folders===true;const sourceFolder=item.source==="x"?"X_Feed":item.source[0].toUpperCase()+item.source.slice(1);const tagFolder=safe(item.folderTag||"");const folder=organize?(item.source==="x"?sourceFolder:sourceFolder+(tagFolder?"/"+tagFolder:"")):"";const filename=(folder?folder+"/":"")+safe(item.postId||item.id||Date.now())+"."+ext(item.url);const id=await new Promise((resolve,reject)=>chrome.downloads.download({url:item.url,filename,conflictAction:"uniquify",saveAs:false},n=>{if(chrome.runtime.lastError)reject(new Error(chrome.runtime.lastError.message));else if(n==null)reject(new Error("Download was not created"));else resolve(n);}));const currentGeneration=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;const q=await getQueue(),x=q.find(y=>(y.key||dedupeKey(y.url))===(item.key||dedupeKey(item.url)));if(currentGeneration!==generation||!x){await chrome.downloads.cancel(id).catch(()=>{});return;}x.downloadId=id;x.lastProgressAt=Date.now();x.lastProgressBytes=0;await setQueue(q);await addDiagnosticLog({event:"DOWNLOAD_CREATED",downloadId:id,source:item.source,postId:item.postId,url:item.url,filename});const [d]=await chrome.downloads.search({id});if(d?.state==="complete")await settleDownload(id,"complete");else if(d?.state==="interrupted")await settleDownload(id,"interrupted",d.error);}
+async function startDownload(item,generation){await addDiagnosticLog({event:"DOWNLOAD_START_REQUEST",source:item.source,postId:item.postId,url:item.url,filenameExtension:ext(item.url),attempt:item.attempts});const organize=(await chrome.storage.local.get("xdl_organize_folders")).xdl_organize_folders===true;const sourceFolder=item.source==="x"?"X_Feed":item.source[0].toUpperCase()+item.source.slice(1);const tagFolder=safe(item.folderTag||"");const folder=organize?(item.source==="x"?sourceFolder:sourceFolder+(tagFolder?"/"+tagFolder:"")):"";const filename=(folder?folder+"/":"")+safe(item.postId||item.id||Date.now())+"."+ext(item.url);const id=await new Promise((resolve,reject)=>chrome.downloads.download({url:item.url,filename,conflictAction:"uniquify",saveAs:false},n=>{if(chrome.runtime.lastError)reject(new Error(chrome.runtime.lastError.message));else if(n==null)reject(new Error("Download was not created"));else resolve(n);}));const currentGeneration=(await chrome.storage.local.get(QUEUE_GENERATION_KEY))[QUEUE_GENERATION_KEY]||0;const q=await getQueue(),x=q.find(y=>(y.key||dedupeKey(y.url))===(item.key||dedupeKey(item.url)));if(currentGeneration!==generation||!x){await chrome.downloads.cancel(id).catch(()=>{});return;}x.downloadId=id;x.startRequestedAt=0;x.lastProgressAt=Date.now();x.lastProgressBytes=0;await setQueue(q);await addDiagnosticLog({event:"DOWNLOAD_CREATED",downloadId:id,source:item.source,postId:item.postId,url:item.url,filename});const [d]=await chrome.downloads.search({id});if(d?.state==="complete")await settleDownload(id,"complete");else if(d?.state==="interrupted")await settleDownload(id,"interrupted",d.error);}
 async function settleDownload(id,state,error){const q=await getQueue(),x=q.find(y=>y.downloadId===id);if(!x){await addDiagnosticLog({event:"DOWNLOAD_EVENT_WITHOUT_QUEUE_ITEM",downloadId:id,state,error:error||null});return;}if(x.state!=="downloading"){await addDiagnosticLog({event:"DOWNLOAD_DUPLICATE_SETTLE_IGNORED",downloadId:id,currentQueueState:x.state,reportedState:state,error:error||null});return;}if(state==="complete"){const matches=await chrome.downloads.search({id}),download=matches[0];await addDiagnosticLog({event:"DOWNLOAD_SETTLE_COMPLETE",downloadId:id,postId:x.postId,url:x.url,download:download?{mime:download.mime,filename:download.filename,finalUrl:download.finalUrl,fileSize:download.fileSize,totalBytes:download.totalBytes,state:download.state}:null});if(x.source==="x"&&isNonImageXDownload(download)){await discardNonImageXDownload(id,download,x);}else{x.state="complete";x.completedAt=Date.now();}}else if(state==="interrupted"){await addDiagnosticLog({event:"DOWNLOAD_SETTLE_INTERRUPTED",downloadId:id,postId:x.postId,url:x.url,error:error||null,attempts:x.attempts});x.error=error||"Download interrupted";if(x.attempts<4){x.state="pending";x.nextAttemptAt=Date.now()+Math.min(60000,2000*Math.pow(2,x.attempts));}else x.state="failed";}else return;await setQueue(q);pumpQueue();if(x.state==="pending"&&x.nextAttemptAt>Date.now())chrome.alarms.create("xdl_queue_pump",{when:x.nextAttemptAt});}
 function splitTags(s){return String(s||"").trim().split(/[\s,]+/).map(x=>x.trim().toLowerCase()).filter(Boolean);}
 function postTags(p){const raw=p.tag_string||p.tags||p.tag_string_general||"";return new Set((Array.isArray(raw)?raw:String(raw).split(/\s+/)).map(x=>String(x).toLowerCase()));}
